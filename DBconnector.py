@@ -4,9 +4,9 @@ import io
 class DBConnection(object):
     def __init__(self):
         super(DBConnection, self).__init__()
-        self.connection = pymysql.connect(host='localhost',
-                                    user='root',
-                                    password='123456',
+        self.connection = pymysql.connect(host='140.122.184.129',
+                                    user='amz_sean',
+                                    password='60747018s',
                                     db='amazon_dataset',
                                     charset='utf8mb4',
                                     cursorclass=pymysql.cursors.DictCursor)

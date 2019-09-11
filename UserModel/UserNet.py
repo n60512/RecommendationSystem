@@ -25,10 +25,22 @@ from DBconnector import DBConnection
 conn = DBConnection()
 conn.connection
 #%%
-sql = ('SELECT `reviewerID`,`asin` ' +
+# sql = ('SELECT `reviewerID`,`asin` ' +
+#     'FROM review ' +
+#     'ORDER BY reviewerID ;'
+#     )
+sql = ('SELECT DISTINCT(`reviewerID`) ' +
     'FROM review ' +
-    'ORDER BY reviewerID ;'
+    'ORDER BY reviewerID;'
     )
 res = conn.selection(sql)
+#%%
+reviewerID = [res[i]['reviewerID'] for i in range(len(res))]
+reviewerID[:10]
+#%%
+def WriteRelate(idlist, fileName = 'reviewerID'):
+    with open('{}.csv'.format(fileName), 'a') as file:
+        for value in idlist:
+            file.write(value + ',')
 
 #%%
