@@ -34,11 +34,33 @@ class Attention(nn.Module):
     def forward(self, itemVec, userVec):
         return self.element_wise_product(itemVec, userVec)
     pass
+#%%
+class InterReview(nn.Module):
+    def __init__(self, hidden_size, n_layers=1, dropout=0):
+        super(InterReview, self).__init__()
+        
+        self.n_layers = n_layers
+        self.hidden_size = hidden_size
+        self.output_size = 64
 
+        self.linear1 = torch.nn.Linear(hidden_size, 250)
+        self.linear2 = torch.nn.Linear(hidden_size, 250)
+        self.linear_alpha = torch.nn.Linear(250, 1)
+        self.IntraReview()
+
+        # Initialize GRU; the input_size and hidden_size params are both set to 'hidden_size'
+        #   because our input size is a word embedding with number of features == hidden_size
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers,
+                          dropout=(0 if n_layers == 1 else dropout), bidirectional=True)
+        
+        self.attn = Attention(hidden_size)
+
+        self.out = nn.Linear(hidden_size,self.output_size)
+        self.out_ = nn.Linear(self.output_size,1)
 #%% 
-class RNN(nn.Module):
+class IntraReview(nn.Module):
     def __init__(self, hidden_size, embedding, itemEmbedding, userEmbedding, n_layers=1, dropout=0):
-        super(RNN, self).__init__()
+        super(IntraReview, self).__init__()
         
         self.n_layers = n_layers
         self.hidden_size = hidden_size
@@ -88,7 +110,7 @@ class RNN(nn.Module):
         weighting_score = self.linear_alpha(x)
         
         # Calculate attention score
-        attn_score = torch.softmax(weighting_score, dim = 0)    
+        attn_score = torch.softmax(weighting_score)    
 
         new_outputs = attn_score * outputs
         new_outputs_sum = torch.sum(new_outputs , dim = 0)    
@@ -365,7 +387,7 @@ def train(training_batches, myVoc):
     userObj.addUser(reviewerID)
 
     # Initialize encoder & decoder models
-    rnn = RNN(hidden_size, embedding, asin_embedding, reviewerID_embedding)
+    rnn = IntraReview(hidden_size, embedding, asin_embedding, reviewerID_embedding)
     # Use appropriate device
     rnn = rnn.to(device)
     print('Models built and ready to go!')
@@ -548,10 +570,10 @@ if __name__ == "__main__":
     batch_size = 14000
     training_batches, myVoc, itemObj, userObj = loadData(batch_size)
 
-    if(True):
+    if(not True):
         train(training_batches , myVoc)
     
-    if(not True):
+    if(True):
         for index in range(0, 100, 10):
             rnn = torch.load(R'ReviewsPrediction_Model\ReviewsPrediction_{}'.format(index))
             evaluate(rnn, myVoc, itemObj, userObj)
@@ -578,7 +600,7 @@ def js(index, attn_weight):
 
 #%%
 jupyter = False
-if(jupyter):
+if(True):
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
         
