@@ -115,8 +115,8 @@ class HANN(nn.Module):
         elm_w_product_inter = self.itemEmbedding(item_index) * self.userEmbedding(user_index)
 
         # Calculate weighting score
-        x = F.relu(self.linear1(outputs) +
-                self.linear2(elm_w_product_inter) 
+        x = F.relu(self.linear3(outputs) +
+                self.linear4(elm_w_product_inter) 
             )
         weighting_score = self.linear_beta(x)
         
@@ -291,7 +291,7 @@ def Read_Asin_Reviewer():
     return asin, reviewerID
 
 #%% Load dataset from database
-def loadData():
+def loadData(havingCount = 15):
 
     print('Loading asin/reviewerID from cav file...')
     asin, reviewerID = Read_Asin_Reviewer()
@@ -311,7 +311,8 @@ def loadData():
         '		SELECT reviewerID ' +
         '		FROM review ' +
         '		group by reviewerID ' +
-        '		HAVING COUNT(reviewerID) >= 10 ' +
+        '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
+        '		limit 5000 '
         '	) ' +
         'SELECT ' +
         'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
@@ -319,7 +320,7 @@ def loadData():
         'FROM review , metadata ' +
         'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
         'AND review.`asin` = metadata.`asin` ' +
-        'ORDER BY reviewerID,unixReviewTime ASC ;' 
+        'ORDER BY reviewerID,unixReviewTime ASC ;'
     )
 
     conn = DBConnection()
@@ -333,7 +334,7 @@ def loadData():
     # Creating Voc
     myVoc = Voc('Review')
     for row in res:
-        if(row['rank'] < 11):
+        if(row['rank'] < havingCount + 1):
             current_sentence = row['reviewText']
             current_sentence = normalizeString(current_sentence)
             myVoc.addSentence(current_sentence)
@@ -435,7 +436,7 @@ def train(training_batches, myVoc):
     print('Models built and ready to go!')
 
     # Configure training/optimization
-    learning_rate = 0.0000001
+    learning_rate = 0.0000005
     IntraGRU.train()
 
     # Initialize optimizers
@@ -449,11 +450,14 @@ def train(training_batches, myVoc):
     loss = 0
     current_loss = 0 
     all_losses = []
-    store_every = 10
+    store_every = 2
+
+    import tqdm
 
     for Epoch in range(101):
         iteration = 0
-        for key_userid, training_batch in training_batches.items():
+        for key_userid, training_batch in tqdm.tqdm(training_batches.items()):
+        # for key_userid, training_batch in training_batches.items():
         # for iteration in range(len(training_batches)):
         #     training_batch = training_batches[iteration]
             
@@ -488,9 +492,10 @@ def train(training_batches, myVoc):
         current_loss = 0
 
         print('Epoch:{}\tLoss:{}'.format(Epoch, all_losses[Epoch]))
+        # torch.save(IntraGRU, R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(Epoch))
 
-        if Epoch % store_every == 0:
-            torch.save(IntraGRU, R'ReviewsPrediction_Model\ReviewsPrediction_{}'.format(Epoch))
+        if Epoch % store_every == 0 and True:
+            torch.save(IntraGRU, R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(Epoch))
 
 #%%
 if __name__ == "__main__":
@@ -499,25 +504,14 @@ if __name__ == "__main__":
     device = torch.device("cuda" if USE_CUDA else "cpu")
     
     # Load in training batches
-    res, myVoc, itemObj, userObj = loadData()
-
-    if(False):
-        ctr_ = 0
-        for key, val in training_batches.items():
-            print('\n=======================\n{}\t{}'.
-                format(key, userObj.reviewerID2index[key])
-                )
-            print(val[4])
-            ctr_ += 1
-            if(ctr_>10):
-                break        
+    res, myVoc, itemObj, userObj = loadData(havingCount=15)  
     
     if(True):
         training_batches = GenerateBatches(
             res, 
             itemObj, 
             userObj,
-            batch_size = 7
+            batch_size = 12
         )
         train(training_batches, myVoc)
 
@@ -541,3 +535,128 @@ def js(index, attn_weight):
     
     with open(R'AttentionVisualize\{}.html'.format(index),'a') as file:
         file.write("];\n$('#text').html($.map(words, function(w) {\nreturn '<span style=\"background-color:hsl(360,100%,' + (w.attention * -50 + 100) + '%)\">' + w.word + ' </span>'\n}))\n</script>")
+
+
+#%%
+class Evaluate(nn.Module):
+    def __init__(self, model):
+        super(Evaluate, self).__init__()
+        self.model = model
+
+    def forward(self, input_variable, lengths, asin_index, reviewerID_index):
+        outputs, hidden , attn_score = self.model(input_variable, lengths, 
+            asin_index, reviewerID_index)
+        return outputs, hidden , attn_score
+
+#%%
+def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7):
+
+    evaluator = Evaluate(model)
+    sentence_attn_score_ls = list()
+    current_loss = 0
+    counter = 0
+    CalculateAttn = False
+
+    for userid, validation_batch in validation_batches.items():
+        
+        input_variable, lengths, rating , asin_index, reviewerID_index = validation_batch
+        
+        # Set device options
+        input_variable = input_variable.to(device)
+        lengths = lengths.to(device)
+        asin_index = asin_index.to(device)
+        reviewerID_index = reviewerID_index.to(device)
+        rating = rating.to(device)
+        
+        with torch.no_grad():
+            # Evaluate
+            output, hidden, attn_score = evaluator(input_variable, lengths, 
+                asin_index, reviewerID_index)
+
+        
+        # Attention record
+        if(CalculateAttn):
+            counter = 0
+            sentence_attn_score = dict()
+            seg_sentence = sentence.split(' ')
+            for val in seg_sentence[:199]:
+                try:
+                    sentence_attn_score[seg_sentence[counter]] = attn_score[counter].item()
+                    pass
+                except IndexError as msg:
+                    print(len(seg_sentence))
+                    print(len(attn_score))
+                    break
+                    pass            
+                counter += 1
+            
+            sentence_attn_score_ls.append(sentence_attn_score)
+            pass
+
+        
+        # Calculate loss (count from batches_indexes)
+        output = output[batches_indexes:].squeeze()
+        normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
+        current_loss += sum((normalize_rating- output)**2)
+        
+        counter += 1
+
+        if(not True):
+            print('==================================')
+            # print('True :')
+            print(normalize_rating)
+            # print('Predict :')
+            print(output.cpu().detach().numpy())
+            # print('closs')
+            # print((normalize_rating - output))
+
+        pass
+
+
+    RMSE = math.sqrt(
+        current_loss/(counter*3)
+    )
+    
+    print('==================================')
+    print('RMSE :{}\tCounter :{}'.format(RMSE,counter))
+
+    return sentence_attn_score_ls
+
+#%%
+USE_CUDA = torch.cuda.is_available()
+device = torch.device("cuda" if USE_CUDA else "cpu")
+    
+# Load in training batches
+res, myVoc, itemObj, userObj = loadData(havingCount=15)
+
+#%%
+
+training_batches = GenerateBatches(
+    res, 
+    itemObj, 
+    userObj,
+    batch_size = 12
+)
+
+#%%
+train(training_batches, myVoc)
+#%%
+validation_batches = GenerateBatches(
+    res, 
+    itemObj,
+    userObj,
+    batch_size = 15
+    )
+#%%
+model = torch.load(R'ReviewsPrediction_Model/ReviewsPrediction_90')
+#%%
+evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
+
+#%%
+for index in range(0,101,2):
+    model = torch.load(R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(index))
+    # model.eval()
+    evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
+
+
+#%%
