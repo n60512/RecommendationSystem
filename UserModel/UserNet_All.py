@@ -95,12 +95,12 @@ class HANN(nn.Module):
         x = F.relu(self.linear1(outputs) +
                 self.linear2(elm_w_product)
             )
-        weighting_score = self.linear_alpha(x)
+        weighting_score = self.linear_alpha(x)  # Constant
         
         # Calculate attention score
-        attn_score = torch.softmax(weighting_score, dim = 0)    
+        intra_attn_score = torch.softmax(weighting_score, dim = 0)    
 
-        new_outputs = attn_score * outputs
+        new_outputs = intra_attn_score * outputs
         # new_outputs = torch.sum(new_outputs , dim = 0)    # output sum
 
         intra_outputs = new_outputs
@@ -143,9 +143,10 @@ class HANN(nn.Module):
             print(' new_outputs:\n',new_outputs.size())
             print('new_outputs_sum size:\n',new_outputs_sum.size())
             stop =1
+        
 
         # Return output and final hidden state
-        return sigmoid_outputs, current_hidden, attn_score
+        return sigmoid_outputs, current_hidden, intra_attn_score
 #%%
 class item:
     def __init__(self):
@@ -457,10 +458,7 @@ def train(training_batches, myVoc):
     for Epoch in range(101):
         iteration = 0
         for key_userid, training_batch in tqdm.tqdm(training_batches.items()):
-        # for key_userid, training_batch in training_batches.items():
-        # for iteration in range(len(training_batches)):
-        #     training_batch = training_batches[iteration]
-            
+                        
             input_variable, lengths, rating , asin_index, reviewerID_index = training_batch
 
             # Set device options
@@ -470,7 +468,7 @@ def train(training_batches, myVoc):
             reviewerID_index = reviewerID_index.to(device)
 
             # Forward pass through encoder
-            outputs, intra_hidden, attn_score = IntraGRU(input_variable, lengths, 
+            outputs, intra_hidden, intra_attn_score = IntraGRU(input_variable, lengths, 
                 asin_index, reviewerID_index)
 
 
@@ -522,19 +520,33 @@ if __name__ == "__main__":
 # tensorboard --logdir=data/ --host localhost --port 8088
 
 #%%
-def js(index, attn_weight):
-    with open(R'AttentionVisualize\{}.html'.format(index),'a') as file:
+def js(index, attn_weight, directory):
+    with open(R'{}/{}.html'.format(directory, index),'a') as file:
         text = "<!DOCTYPE html>\n<html>\n<body>\n<head>\n<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js'></script>\n</head><h1>Attn</h1><div id='text'>text goes here</div>\n"
         file.write(text)
         file.write('\n<script>\nvar words = [')
 
     for key, val in attn_weight.items():
-        with open(R'AttentionVisualize\{}.html'.format(index),'a') as file:
+        with open(R'{}/{}.html'.format(directory, index),'a') as file:
             file.write("{{\n'word': '{}',".format(key))
             file.write("'attention': {},\n}},".format(val))
     
-    with open(R'AttentionVisualize\{}.html'.format(index),'a') as file:
+    with open(R'{}/{}.html'.format(directory, index),'a') as file:
         file.write("];\n$('#text').html($.map(words, function(w) {\nreturn '<span style=\"background-color:hsl(360,100%,' + (w.attention * -50 + 100) + '%)\">' + w.word + ' </span>'\n}))\n</script>")
+
+
+#%%
+class UserAttnRecord():
+    def __init__(self, userid):
+        self.userid = userid
+        self.intra_attn_score = list()
+        self.inter_attn_score = list()
+    
+    def addIntraAttn(self, score):
+        self.intra_attn_score.append(score)
+
+    def addInterAttn(self, score):
+        self.inter_attn_score.append(score)
 
 
 #%%
@@ -544,23 +556,48 @@ class Evaluate(nn.Module):
         self.model = model
 
     def forward(self, input_variable, lengths, asin_index, reviewerID_index):
-        outputs, hidden , attn_score = self.model(input_variable, lengths, 
+        outputs, hidden , intra_attn_score = self.model(input_variable, lengths, 
             asin_index, reviewerID_index)
-        return outputs, hidden , attn_score
+        return outputs, hidden , intra_attn_score
 
 #%%
-def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7):
+def Variables2Sentences(voc, input_variable, batch_size = 15):
+
+    input_variable_np = input_variable.numpy()
+    sentences = list()
+
+    # Loop colunm 
+    for colunm in range(batch_size):
+        # Adding colunm sentence
+        sentences.append(input_variable_np[:,colunm])
+
+    return sentences
+
+#%%
+def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7, output_count = 3):
 
     evaluator = Evaluate(model)
-    sentence_attn_score_ls = list()
     current_loss = 0
     counter = 0
-    CalculateAttn = False
+    CalculateAttn = True
+
+    # List for recording user attention values
+    USER_ATTN_RECORD = list()
 
     for userid, validation_batch in validation_batches.items():
         
         input_variable, lengths, rating , asin_index, reviewerID_index = validation_batch
         
+        """
+        Getting input_sentences
+        """
+        # Convert input_variable to input_sentences
+        input_sentences = Variables2Sentences(voc, input_variable, batch_size= len(lengths))
+        # remove zero value (PAD)
+        input_sentences = [ input_sentences[index_][input_sentences[index_] != 0] 
+                    for index_ in range(len(lengths)) ] 
+
+
         # Set device options
         input_variable = input_variable.to(device)
         lengths = lengths.to(device)
@@ -570,59 +607,63 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
         
         with torch.no_grad():
             # Evaluate
-            output, hidden, attn_score = evaluator(input_variable, lengths, 
-                asin_index, reviewerID_index)
+            output, hidden, intra_attn_score = evaluator(input_variable, lengths, 
+                asin_index, reviewerID_index)       
 
-        
+        # Construct user attention record object
+        SingleUAR = UserAttnRecord(userid)
+
         # Attention record
         if(CalculateAttn):
-            counter = 0
-            sentence_attn_score = dict()
-            seg_sentence = sentence.split(' ')
-            for val in seg_sentence[:199]:
-                try:
-                    sentence_attn_score[seg_sentence[counter]] = attn_score[counter].item()
-                    pass
-                except IndexError as msg:
-                    print(len(seg_sentence))
-                    print(len(attn_score))
-                    break
-                    pass            
-                counter += 1
-            
-            sentence_attn_score_ls.append(sentence_attn_score)
+            # iterate input_sentences
+            for index_ in range(len(input_sentences)):
+                sentence_ = input_sentences[index_]
+                sentence_attn_score = dict()
+                word_count = 0
+                
+                # iterate each word of sentence_
+                for word_number in sentence_:
+
+                    # Convert index to word
+                    word = voc.index2word[word_number]
+
+                    # Adding word's attention score by intra_attn_score `colunm` data
+                    # intra_attn_score[:,index_] : get number `index` colunm 
+                    sentence_attn_score[word] = intra_attn_score[:,index_][word_count].item()
+                    word_count += 1
+
+                SingleUAR.addIntraAttn(sentence_attn_score)
+                pass
+
+            USER_ATTN_RECORD.append(SingleUAR)
             pass
 
-        
         # Calculate loss (count from batches_indexes)
         output = output[batches_indexes:].squeeze()
         normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
-        current_loss += sum((normalize_rating- output)**2)
+        current_loss += sum((normalize_rating - output)**2)
         
         counter += 1
 
         if(not True):
             print('==================================')
-            # print('True :')
             print(normalize_rating)
-            # print('Predict :')
             print(output.cpu().detach().numpy())
-            # print('closs')
-            # print((normalize_rating - output))
-
+            
         pass
 
 
     RMSE = math.sqrt(
-        current_loss/(counter*3)
+        current_loss/(counter * output_count)
     )
-    
-    print('==================================')
-    print('RMSE :{}\tCounter :{}'.format(RMSE,counter))
 
-    return sentence_attn_score_ls
+    return RMSE, USER_ATTN_RECORD
 
 #%%
+
+"""
+Evalution
+"""
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
     
@@ -630,33 +671,40 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 res, myVoc, itemObj, userObj = loadData(havingCount=15)
 
 #%%
-
-training_batches = GenerateBatches(
-    res, 
-    itemObj, 
-    userObj,
-    batch_size = 12
-)
-
-#%%
-train(training_batches, myVoc)
-#%%
 validation_batches = GenerateBatches(
     res, 
     itemObj,
     userObj,
     batch_size = 15
     )
-#%%
-model = torch.load(R'ReviewsPrediction_Model/ReviewsPrediction_90')
-#%%
-evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
 
 #%%
 for index in range(0,101,2):
     model = torch.load(R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(index))
     # model.eval()
-    evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
+    evaluate(model,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
 
 
 #%%
+model = torch.load(R'ReviewsPrediction_Model/1005/ReviewsPrediction_{}'.format(50))
+#%%
+
+RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, 
+        validation_batches, batches_indexes = 12)
+
+#%%
+"""
+Write attention result into html file.
+"""
+for userRecordObj in USER_ATTN_RECORD:
+    # Create folder if not exists
+    directory = ('AttentionVisualize/{}'.format(userRecordObj.userid))
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    else:
+        print('folder : {} exist'.format(directory))
+    
+    index_ = 0
+    for sentence in userRecordObj.intra_attn_score:
+        js( index_, sentence, directory)
+        index_ += 1
