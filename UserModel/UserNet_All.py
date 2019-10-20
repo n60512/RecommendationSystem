@@ -21,6 +21,7 @@ import math
 import numpy as np
 import time
 from DBconnector import DBConnection
+import tqdm
 
 #%%
 class Attention(nn.Module):
@@ -120,10 +121,15 @@ class HANN(nn.Module):
             )
         weighting_score = self.linear_beta(x)
         
-        # Calculate attention score
-        attn_score = torch.softmax(weighting_score, dim = 0)    
+        # Calculate attention score (size: [200,15,1])
+        inter_attn_score = torch.softmax(weighting_score, dim = 1)
+        
+        # print('inter_attn_score:')
+        # print(inter_attn_score[0])
+        # print(torch.sum(inter_attn_score[0] , dim = 0))
+        # stop = 1    
 
-        new_outputs = attn_score * outputs
+        new_outputs = inter_attn_score * outputs
         new_outputs_sum = torch.sum(new_outputs , dim = 0)    
 
         # hidden_size to 64 dimension
@@ -139,14 +145,14 @@ class HANN(nn.Module):
             print('elm_w_product:\n',elm_w_product.size())
             print(' x:\n',x.size())
             print(' weighting_score:\n',weighting_score.size())
-            print(' attn_score:\n',attn_score.size())
+            print(' inter_attn_score:\n',inter_attn_score.size())
             print(' new_outputs:\n',new_outputs.size())
             print('new_outputs_sum size:\n',new_outputs_sum.size())
             stop =1
         
 
         # Return output and final hidden state
-        return sigmoid_outputs, current_hidden, intra_attn_score
+        return sigmoid_outputs, current_hidden, intra_attn_score , inter_attn_score
 #%%
 class item:
     def __init__(self):
@@ -334,11 +340,13 @@ def loadData(havingCount = 15):
     st = time.time()
     # Creating Voc
     myVoc = Voc('Review')
-    for row in res:
+    
+    for row in tqdm.tqdm(res):
+    # for row in res:
         if(row['rank'] < havingCount + 1):
             current_sentence = row['reviewText']
             current_sentence = normalizeString(current_sentence)
-            myVoc.addSentence(current_sentence)
+            myVoc.addSentence(current_sentence)            
         else:
             this_is_testing_data = 1
 
@@ -416,7 +424,7 @@ def GenerateBatches(res, itemObj, userObj, batch_size = 7):
     return training_batches
 
 #%% Train model
-def train(training_batches, myVoc):
+def train(training_batches, myVoc, WriteTrainLoss=True):
     # Configure models
     hidden_size = 300
 
@@ -453,12 +461,10 @@ def train(training_batches, myVoc):
     all_losses = []
     store_every = 2
 
-    import tqdm
-
     for Epoch in range(101):
         iteration = 0
         for key_userid, training_batch in tqdm.tqdm(training_batches.items()):
-                        
+
             input_variable, lengths, rating , asin_index, reviewerID_index = training_batch
 
             # Set device options
@@ -468,7 +474,7 @@ def train(training_batches, myVoc):
             reviewerID_index = reviewerID_index.to(device)
 
             # Forward pass through encoder
-            outputs, intra_hidden, intra_attn_score = IntraGRU(input_variable, lengths, 
+            outputs, intra_hidden, intra_attn_score, inter_attn_score = IntraGRU(input_variable, lengths, 
                 asin_index, reviewerID_index)
 
 
@@ -478,22 +484,25 @@ def train(training_batches, myVoc):
 
             err = outputs.squeeze(1) - normalize_rating
             loss = torch.sum(torch.mul(err, err) , dim = 0)
-
+            # loss = loss/len(rating)   # average
+            
             loss.backward()
             current_loss += loss
 
             IntraGRU_optimizer.step()
-
             iteration += 1
         
         all_losses.append(current_loss / len(training_batches))
         current_loss = 0
 
         print('Epoch:{}\tLoss:{}'.format(Epoch, all_losses[Epoch]))
-        # torch.save(IntraGRU, R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(Epoch))
 
         if Epoch % store_every == 0 and True:
-            torch.save(IntraGRU, R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(Epoch))
+            torch.save(IntraGRU, R'ReviewsPrediction_Model/1020/ReviewsPrediction_{}'.format(Epoch))
+        
+        if WriteTrainLoss:
+            with open(R'ReviewsPrediction_Model/1020/TrainingLoss.txt','a') as file:
+                file.write('Epoch:{}\tLoss:{}\n'.format(Epoch, all_losses[Epoch]))
 
 #%%
 if __name__ == "__main__":
@@ -513,9 +522,7 @@ if __name__ == "__main__":
         )
         train(training_batches, myVoc)
 
-
     pass
-
 
 # tensorboard --logdir=data/ --host localhost --port 8088
 
@@ -556,9 +563,9 @@ class Evaluate(nn.Module):
         self.model = model
 
     def forward(self, input_variable, lengths, asin_index, reviewerID_index):
-        outputs, hidden , intra_attn_score = self.model(input_variable, lengths, 
+        outputs, hidden , intra_attn_score, inter_attn_score = self.model(input_variable, lengths, 
             asin_index, reviewerID_index)
-        return outputs, hidden , intra_attn_score
+        return outputs, hidden , intra_attn_score, inter_attn_score
 
 #%%
 def Variables2Sentences(voc, input_variable, batch_size = 15):
@@ -574,17 +581,18 @@ def Variables2Sentences(voc, input_variable, batch_size = 15):
     return sentences
 
 #%%
-def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7, output_count = 3):
+def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7, output_count = 3, CalculateAttn = True):
 
     evaluator = Evaluate(model)
     current_loss = 0
     counter = 0
-    CalculateAttn = True
+    # CalculateAttn = True
 
     # List for recording user attention values
     USER_ATTN_RECORD = list()
 
-    for userid, validation_batch in validation_batches.items():
+    for userid, validation_batch in tqdm.tqdm(validation_batches.items()):
+    # for userid, validation_batch in validation_batches.items():
         
         input_variable, lengths, rating , asin_index, reviewerID_index = validation_batch
         
@@ -607,14 +615,19 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
         
         with torch.no_grad():
             # Evaluate
-            output, hidden, intra_attn_score = evaluator(input_variable, lengths, 
+            output, hidden, intra_attn_score, inter_attn_score = evaluator(input_variable, lengths, 
                 asin_index, reviewerID_index)       
-
-        # Construct user attention record object
-        SingleUAR = UserAttnRecord(userid)
 
         # Attention record
         if(CalculateAttn):
+
+            # Construct user attention record object
+            SingleUAR = UserAttnRecord(userid)
+
+            # Adding inter attn score
+            inter_attn_score_mean = torch.mean(inter_attn_score, dim = 0)
+            SingleUAR.inter_attn_score = inter_attn_score_mean.squeeze().tolist()            
+
             # iterate input_sentences
             for index_ in range(len(input_sentences)):
                 sentence_ = input_sentences[index_]
@@ -661,50 +674,61 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
 
 #%%
 
-"""
-Evalution
-"""
-USE_CUDA = torch.cuda.is_available()
-device = torch.device("cuda" if USE_CUDA else "cpu")
+# """
+# Evalution
+# """
+# USE_CUDA = torch.cuda.is_available()
+# device = torch.device("cuda" if USE_CUDA else "cpu")
     
-# Load in training batches
-res, myVoc, itemObj, userObj = loadData(havingCount=15)
+# # Load in training batches
+# res, myVoc, itemObj, userObj = loadData(havingCount=15)
 
-#%%
-validation_batches = GenerateBatches(
-    res, 
-    itemObj,
-    userObj,
-    batch_size = 15
-    )
+# #%%
+# validation_batches = GenerateBatches(
+#     res, 
+#     itemObj,
+#     userObj,
+#     batch_size = 15
+#     )
+# #%%
+# """
+# Show RMSE
+# """
+# for index in range(0,89,2):
+#     model = torch.load(R'ReviewsPrediction_Model/1017/ReviewsPrediction_{}'.format(index))
+#     RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, 
+#         batches_indexes = 12, output_count=3, CalculateAttn=False)
+#     print('Epoch: {}\tRMSE: {}'.format(index, RMSE))
 
-#%%
-for index in range(0,101,2):
-    model = torch.load(R'ReviewsPrediction_Model/ReviewsPrediction_{}'.format(index))
-    # model.eval()
-    evaluate(model,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
+# #%%
+# model = torch.load(R'ReviewsPrediction_Model/1017/ReviewsPrediction_{}'.format(40))
+# #%%
 
+# RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
 
-#%%
-model = torch.load(R'ReviewsPrediction_Model/1005/ReviewsPrediction_{}'.format(50))
-#%%
-
-RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, 
-        validation_batches, batches_indexes = 12)
-
-#%%
-"""
-Write attention result into html file.
-"""
-for userRecordObj in USER_ATTN_RECORD:
-    # Create folder if not exists
-    directory = ('AttentionVisualize/{}'.format(userRecordObj.userid))
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    else:
-        print('folder : {} exist'.format(directory))
+# #%%
+# """
+# Write attention result into html file and txt filr.
+# """
+# for userRecordObj in USER_ATTN_RECORD:
+#     # Create folder if not exists
+#     directory = ('AttentionVisualize/{}'.format(userRecordObj.userid))
+#     if not os.path.exists(directory):
+#         os.makedirs(directory)
+#     else:
+#         print('folder : {} exist'.format(directory))
     
-    index_ = 0
-    for sentence in userRecordObj.intra_attn_score:
-        js( index_, sentence, directory)
-        index_ += 1
+#     index_ = 0
+#     for sentence in userRecordObj.intra_attn_score:
+#         js( index_, sentence, directory)
+#         index_ += 1
+    
+#     with open(R'{}/Inter_Attn_Score.txt'.format(directory),'a') as file:
+#         count = 0
+#         for score in userRecordObj.inter_attn_score:
+#             file.write('Review {} : {}\n'.format(count, score))
+#             count += 1
+        
+
+# #%%
+# RMSE
