@@ -38,35 +38,33 @@ class Attention(nn.Module):
 
 #%% 
 class HANN(nn.Module):
-    def __init__(self, hidden_size, embedding, itemEmbedding, userEmbedding, n_layers=1, dropout=0):
+    def __init__(self, hidden_size, embedding, itemEmbedding, userEmbedding, n_layers=1, dropout=0, latentK = 64):
         super(HANN, self).__init__()
         
         self.n_layers = n_layers
         self.hidden_size = hidden_size
-        self.output_size = 64
+        self.output_size = latentK
 
         self.embedding = embedding
         self.itemEmbedding = itemEmbedding
         self.userEmbedding = userEmbedding
 
-        self.linear1 = torch.nn.Linear(hidden_size, 250)
-        self.linear2 = torch.nn.Linear(hidden_size, 250)
-        self.linear_alpha = torch.nn.Linear(250, 1)
+        self.linear1 = torch.nn.Linear(hidden_size, hidden_size)
+        self.linear2 = torch.nn.Linear(hidden_size, hidden_size)
+        self.linear_alpha = torch.nn.Linear(hidden_size, 1)
 
         # Initialize GRU; the input_size and hidden_size params are both set to 'hidden_size'
         #   because our input size is a word embedding with number of features == hidden_size
         self.intra_review = nn.GRU(hidden_size, hidden_size, n_layers,
-                          dropout=(0 if n_layers == 1 else dropout), 
+                          dropout=dropout, 
                           bidirectional=True)
-        
-        self.intra_attn = Attention(hidden_size)
 
-        self.linear3 = torch.nn.Linear(hidden_size, 250)
-        self.linear4 = torch.nn.Linear(hidden_size, 250)
-        self.linear_beta = torch.nn.Linear(250, 1)
+        self.linear3 = torch.nn.Linear(hidden_size, hidden_size)
+        self.linear4 = torch.nn.Linear(hidden_size, hidden_size)
+        self.linear_beta = torch.nn.Linear(hidden_size, 1)
 
         self.inter_review = nn.GRU(hidden_size, hidden_size, n_layers,
-                          dropout=(0 if n_layers == 1 else dropout), 
+                          dropout=dropout, 
                           bidirectional=True)
         
         self.inter_attn = Attention(hidden_size)        
@@ -298,7 +296,7 @@ def Read_Asin_Reviewer():
     return asin, reviewerID
 
 #%% Load dataset from database
-def loadData(havingCount = 15):
+def loadData(havingCount = 15, LIMIT=5000):
 
     print('Loading asin/reviewerID from cav file...')
     asin, reviewerID = Read_Asin_Reviewer()
@@ -319,7 +317,7 @@ def loadData(havingCount = 15):
         '		FROM review ' +
         '		group by reviewerID ' +
         '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
-        '		limit 5000 '
+        '		limit {} '.format(LIMIT) +
         '	) ' +
         'SELECT ' +
         'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
@@ -424,7 +422,7 @@ def GenerateBatches(res, itemObj, userObj, batch_size = 7):
     return training_batches
 
 #%% Train model
-def train(training_batches, myVoc, WriteTrainLoss=True):
+def train(training_batches, myVoc, directory, WriteTrainLoss=True):
     # Configure models
     hidden_size = 300
 
@@ -439,13 +437,17 @@ def train(training_batches, myVoc, WriteTrainLoss=True):
     reviewerID_embedding = nn.Embedding(len(reviewerID), hidden_size)
 
     # Initialize encoder & decoder models
-    IntraGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding)
+    IntraGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding, n_layers=1, dropout=0.5)
     # Use appropriate device
     IntraGRU = IntraGRU.to(device)
     print('Models built and ready to go!')
 
     # Configure training/optimization
-    learning_rate = 0.0000005
+    # learning_rate = 0.0000005
+    # learning_rate = 0.000005
+    # learning_rate = 0.00001
+    # learning_rate = 0.00002
+    learning_rate = 0.00004
     IntraGRU.train()
 
     # Initialize optimizers
@@ -453,17 +455,24 @@ def train(training_batches, myVoc, WriteTrainLoss=True):
     IntraGRU_optimizer = optim.Adam(IntraGRU.parameters(), 
         lr=learning_rate, weight_decay=0.001)
     
-    # Zero gradients
-    IntraGRU_optimizer.zero_grad()
-
     loss = 0
     current_loss = 0 
     all_losses = []
     store_every = 2
 
+    # Assuming optimizer has two groups.
+    scheduler = optim.lr_scheduler.StepLR(IntraGRU_optimizer, 
+        step_size=25, gamma=0.5)
+    
+
     for Epoch in range(101):
         iteration = 0
+        scheduler.step()
+
         for key_userid, training_batch in tqdm.tqdm(training_batches.items()):
+
+            # Zero gradients
+            IntraGRU_optimizer.zero_grad()
 
             input_variable, lengths, rating , asin_index, reviewerID_index = training_batch
 
@@ -490,39 +499,24 @@ def train(training_batches, myVoc, WriteTrainLoss=True):
             current_loss += loss
 
             IntraGRU_optimizer.step()
+            
             iteration += 1
         
-        all_losses.append(current_loss / len(training_batches))
+        # all_losses.append(current_loss / len(training_batches))
+        current_loss_average = current_loss / len(training_batches)
         current_loss = 0
 
-        print('Epoch:{}\tLoss:{}'.format(Epoch, all_losses[Epoch]))
+        print('Epoch:{}\tSE:{}\tLR:{}'.format(Epoch, current_loss_average,scheduler.get_lr()))
+        # print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
 
         if Epoch % store_every == 0 and True:
-            torch.save(IntraGRU, R'ReviewsPrediction_Model/1020/ReviewsPrediction_{}'.format(Epoch))
+            torch.save(IntraGRU, R'{}ReviewsPrediction_{}'.format(directory, Epoch))
         
         if WriteTrainLoss:
-            with open(R'ReviewsPrediction_Model/1020/TrainingLoss.txt','a') as file:
-                file.write('Epoch:{}\tLoss:{}\n'.format(Epoch, all_losses[Epoch]))
+            with open(R'{}TrainingLoss.txt'.format(directory),'a') as file:
+                # file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))
+                file.write('Epoch:{}\tSE:{}\tLR:{}\n'.format(Epoch, current_loss_average, scheduler.get_lr()))
 
-#%%
-if __name__ == "__main__":
-
-    USE_CUDA = torch.cuda.is_available()
-    device = torch.device("cuda" if USE_CUDA else "cpu")
-    
-    # Load in training batches
-    res, myVoc, itemObj, userObj = loadData(havingCount=15)  
-    
-    if(True):
-        training_batches = GenerateBatches(
-            res, 
-            itemObj, 
-            userObj,
-            batch_size = 12
-        )
-        train(training_batches, myVoc)
-
-    pass
 
 # tensorboard --logdir=data/ --host localhost --port 8088
 
@@ -585,8 +579,7 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
 
     evaluator = Evaluate(model)
     current_loss = 0
-    counter = 0
-    # CalculateAttn = True
+    reviews_counter = 0
 
     # List for recording user attention values
     USER_ATTN_RECORD = list()
@@ -615,7 +608,7 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
         
         with torch.no_grad():
             # Evaluate
-            output, hidden, intra_attn_score, inter_attn_score = evaluator(input_variable, lengths, 
+            outputs, hidden, intra_attn_score, inter_attn_score = evaluator(input_variable, lengths, 
                 asin_index, reviewerID_index)       
 
         # Attention record
@@ -652,36 +645,39 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
             pass
 
         # Calculate loss (count from batches_indexes)
-        output = output[batches_indexes:].squeeze()
+        outputs = outputs[batches_indexes:].squeeze()
         normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
-        current_loss += sum((normalize_rating - output)**2)
+        err = outputs - normalize_rating
+
+        single_user_total_loss = torch.sum(torch.mul(err, err) , dim = 0)
         
-        counter += 1
+        current_loss += single_user_total_loss
+        reviews_counter += len(rating[batches_indexes:])
 
         if(not True):
             print('==================================')
             print(normalize_rating)
-            print(output.cpu().detach().numpy())
+            print(outputs.cpu().detach().numpy())
+            print(current_loss)
             
         pass
-
-
+        
     RMSE = math.sqrt(
-        current_loss/(counter * output_count)
+        current_loss/reviews_counter
     )
 
     return RMSE, USER_ATTN_RECORD
 
 #%%
 
-# """
-# Evalution
-# """
+"""
+Evalution
+"""
 # USE_CUDA = torch.cuda.is_available()
 # device = torch.device("cuda" if USE_CUDA else "cpu")
     
 # # Load in training batches
-# res, myVoc, itemObj, userObj = loadData(havingCount=15)
+# res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=2000)
 
 # #%%
 # validation_batches = GenerateBatches(
@@ -694,41 +690,78 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
 # """
 # Show RMSE
 # """
-# for index in range(0,89,2):
-#     model = torch.load(R'ReviewsPrediction_Model/1017/ReviewsPrediction_{}'.format(index))
+# for index in range(0,102,2):
+#     model = torch.load(R'ReviewsPrediction_Model/1021/ReviewsPrediction_{}'.format(index))
 #     RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, 
 #         batches_indexes = 12, output_count=3, CalculateAttn=False)
 #     print('Epoch: {}\tRMSE: {}'.format(index, RMSE))
 
-# #%%
-# model = torch.load(R'ReviewsPrediction_Model/1017/ReviewsPrediction_{}'.format(40))
-# #%%
-
+#%%
+# model = torch.load(R'ReviewsPrediction_Model/1020/ReviewsPrediction_{}'.format(40))
 # RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
 
-# #%%
-# """
-# Write attention result into html file and txt filr.
-# """
-# for userRecordObj in USER_ATTN_RECORD:
-#     # Create folder if not exists
-#     directory = ('AttentionVisualize/{}'.format(userRecordObj.userid))
-#     if not os.path.exists(directory):
-#         os.makedirs(directory)
-#     else:
-#         print('folder : {} exist'.format(directory))
-    
-#     index_ = 0
-#     for sentence in userRecordObj.intra_attn_score:
-#         js( index_, sentence, directory)
-#         index_ += 1
-    
-#     with open(R'{}/Inter_Attn_Score.txt'.format(directory),'a') as file:
-#         count = 0
-#         for score in userRecordObj.inter_attn_score:
-#             file.write('Review {} : {}\n'.format(count, score))
-#             count += 1
+#%%
+"""
+Write attention result into html file and txt filr.
+"""
+def WriteAttention(USER_ATTN_RECORD):
+    for userRecordObj in USER_ATTN_RECORD:
+        # Create folder if not exists
+        directory = ('AttentionVisualize/{}'.format(userRecordObj.userid))
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        else:
+            print('folder : {} exist'.format(directory))
+        
+        index_ = 0
+        for sentence in userRecordObj.intra_attn_score:
+            js( index_, sentence, directory)
+            index_ += 1
+        
+        with open(R'{}/Inter_Attn_Score.txt'.format(directory),'a') as file:
+            count = 0
+            for score in userRecordObj.inter_attn_score:
+                file.write('Review {} : {}\n'.format(count, score))
+                count += 1
         
 
-# #%%
-# RMSE
+
+#%%
+if __name__ == "__main__":
+
+    USE_CUDA = torch.cuda.is_available()
+    device = torch.device("cuda" if USE_CUDA else "cpu")
+    directory = R'ReviewsPrediction_Model/1023_lr4e05_step25_ur5000/'
+
+    # Load in training batches
+    res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=5000)  
+    
+    if(True):
+        training_batches = GenerateBatches(
+            res, 
+            itemObj, 
+            userObj,
+            batch_size = 12
+            
+        )
+        train(training_batches, myVoc, directory)
+        pass
+
+    if(True):
+        validation_batches = GenerateBatches(
+            res, 
+            itemObj,
+            userObj,
+            batch_size = 15
+            )
+
+        for Epoch in range(0,102,2):
+            model = torch.load(R'{}ReviewsPrediction_{}'.format(directory, Epoch))
+            RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, 
+                batches_indexes = 12, output_count=3, CalculateAttn=False)
+            
+            print('Epoch: {}\tRMSE: {}'.format(Epoch, RMSE))
+            
+            with open(R'{}ValidationLoss.txt'.format(directory),'a') as file:
+                file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
+    pass
