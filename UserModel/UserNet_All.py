@@ -43,7 +43,7 @@ class HANN(nn.Module):
         
         self.n_layers = n_layers
         self.hidden_size = hidden_size
-        self.output_size = latentK
+        self.latentK = latentK
 
         self.embedding = embedding
         self.itemEmbedding = itemEmbedding
@@ -67,10 +67,9 @@ class HANN(nn.Module):
                           dropout=dropout, 
                           bidirectional=True)
         
-        self.inter_attn = Attention(hidden_size)        
-
-        self.out = nn.Linear(hidden_size,self.output_size)
-        self.out_ = nn.Linear(self.output_size,1)
+        self.out128 = nn.Linear(hidden_size*2 , self.latentK*2)
+        self.out64 = nn.Linear(self.latentK*2, self.latentK)
+        self.out_ = nn.Linear(self.latentK, 1)
 
     def forward(self, input_seq, input_lengths, item_index, user_index, hidden=None):
         # Convert word indexes to embeddings
@@ -100,38 +99,44 @@ class HANN(nn.Module):
         intra_attn_score = torch.softmax(weighting_score, dim = 0)    
 
         new_outputs = intra_attn_score * outputs
-        # new_outputs = torch.sum(new_outputs , dim = 0)    # output sum
+        intra_outputs = torch.sum(new_outputs , dim = 0)    # output sum
 
-        intra_outputs = new_outputs
+        intra_outputs = intra_outputs.unsqueeze(dim=1)
+        stop=1
+        # intra_outputs = new_outputs
 
         # Forward pass through GRU
         outputs, current_hidden = self.inter_review(intra_outputs, hidden)
  
+        stop =1
         # Sum bidirectional GRU outputs
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
 
         # Calculate element-wise product
         elm_w_product_inter = self.itemEmbedding(item_index) * self.userEmbedding(user_index)
 
+        test_outputs = outputs.squeeze(dim=1)
         # Calculate weighting score
-        x = F.relu(self.linear3(outputs) +
+        x = F.relu(self.linear3(test_outputs) +
                 self.linear4(elm_w_product_inter) 
             )
         weighting_score = self.linear_beta(x)
         
         # Calculate attention score (size: [200,15,1])
-        inter_attn_score = torch.softmax(weighting_score, dim = 1)
+        inter_attn_score = torch.softmax(weighting_score, dim = 0)
+        test_inter_attn_score = inter_attn_score.unsqueeze(dim=1)
+        stop = 1
         
-        # print('inter_attn_score:')
-        # print(inter_attn_score[0])
-        # print(torch.sum(inter_attn_score[0] , dim = 0))
-        # stop = 1    
-
-        new_outputs = inter_attn_score * outputs
+        new_outputs = test_inter_attn_score * outputs
         new_outputs_sum = torch.sum(new_outputs , dim = 0)    
 
+        # Concat. interaction vector & GRU output
+        new_outputs_cat = torch.cat((new_outputs_sum, elm_w_product_inter) ,1)
+
+        # hidden_size to 128 dimension
+        new_outputs = self.out128(new_outputs_cat) 
         # hidden_size to 64 dimension
-        new_outputs = self.out(new_outputs_sum)  
+        new_outputs = self.out64(new_outputs)  
         # 64 to 1 dimension
         new_outputs = self.out_(new_outputs)    
         sigmoid_outputs = torch.sigmoid(new_outputs)
@@ -333,24 +338,8 @@ def loadData(havingCount = 15, LIMIT=5000):
     conn.close()
 
     print('Loading complete. [{}]'.format(time.time()-st))
-    print('Creating Voc ...') 
-
-    st = time.time()
-    # Creating Voc
-    myVoc = Voc('Review')
     
-    for row in tqdm.tqdm(res):
-    # for row in res:
-        if(row['rank'] < havingCount + 1):
-            current_sentence = row['reviewText']
-            current_sentence = normalizeString(current_sentence)
-            myVoc.addSentence(current_sentence)            
-        else:
-            this_is_testing_data = 1
-
-    print('Voc creation complete. [{}]'.format(time.time()-st))
-    
-    return res, myVoc, itemObj, userObj
+    return res, itemObj, userObj
 
 #%%
 class PersonalHistory:
@@ -372,38 +361,63 @@ class PersonalHistory:
     pass
 
 #%% 根據使用者的回復數決定 batch
-def GenerateBatches(res, itemObj, userObj, batch_size = 7):
+def GenerateBatches(res, itemObj, userObj, batch_size = 7, validation_batch_size=3):
     
     USER = list()
     LAST_USER = ''
     ctr = -1
+    havingCount = batch_size + validation_batch_size
 
+    # Creating Voc
     st = time.time()
-    print('Generating batches ...') 
+    print('Creating Voc ...') 
+    myVoc = Voc('Review')
 
-    for index in range(len(res)):
+    for index in tqdm.tqdm(range(len(res))):
         # Check is the next user or not
         if(LAST_USER != res[index]['reviewerID']):
             LAST_USER = res[index]['reviewerID']
             USER.append(PersonalHistory(res[index]['reviewerID']))
             ctr += 1   # add counter if change the user id
-            
-        USER[ctr].addData(
-                    normalizeString(res[index]['reviewText']),
-                    res[index]['overall'], 
-                    res[index]['asin'],
-                    res[index]['reviewerID']
-                )
+        
+        if(res[index]['rank'] < havingCount + 1):
+            current_sentence = normalizeString(res[index]['reviewText'])
+            myVoc.addSentence(current_sentence) # myVoc add word !
+            USER[ctr].addData(
+                        current_sentence,
+                        res[index]['overall'], 
+                        res[index]['asin'],
+                        res[index]['reviewerID']
+                    )
+            pass
+        pass
 
+    print('Voc creation complete. [{}]'.format(time.time()-st))
+    
+
+    st = time.time()
+    print('Generating batches ...')     
     training_batches = dict()
-    for index in range(len(USER)):
+    validation_batches = dict()
+
+    for index in tqdm.tqdm(range(len(USER))):
         id_ = USER[index].reviewerID
+
         training_batches[id_] = batch2TrainData(
                                     myVoc, 
                                     USER[index].sentences[:batch_size], 
                                     USER[index].rating[:batch_size], 
                                     USER[index].this_asin[:batch_size], 
                                     USER[index].this_reviewerID[:batch_size],
+                                    itemObj,
+                                    userObj
+                                )
+        validation_batches[id_] = batch2TrainData(
+                                    myVoc, 
+                                    USER[index].sentences[batch_size:batch_size + validation_batch_size], 
+                                    USER[index].rating[batch_size:batch_size + validation_batch_size], 
+                                    USER[index].this_asin[batch_size:batch_size + validation_batch_size], 
+                                    USER[index].this_reviewerID[batch_size:batch_size + validation_batch_size], 
                                     itemObj,
                                     userObj
                                 )
@@ -419,10 +433,10 @@ def GenerateBatches(res, itemObj, userObj, batch_size = 7):
     print('User length :{}'.format(ctr))
     print('Batch generation complete . [{}]'.format(time.time()-st)) 
             
-    return training_batches
+    return training_batches, validation_batches, myVoc
 
 #%% Train model
-def train(training_batches, myVoc, directory, WriteTrainLoss=True):
+def train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=15, WriteTrainLoss=True, label4training=3):
     # Configure models
     hidden_size = 300
 
@@ -445,9 +459,9 @@ def train(training_batches, myVoc, directory, WriteTrainLoss=True):
     # Configure training/optimization
     # learning_rate = 0.0000005
     # learning_rate = 0.000005
-    # learning_rate = 0.00001
+    learning_rate = 0.00001
     # learning_rate = 0.00002
-    learning_rate = 0.00004
+    # learning_rate = 0.00004
     IntraGRU.train()
 
     # Initialize optimizers
@@ -457,65 +471,96 @@ def train(training_batches, myVoc, directory, WriteTrainLoss=True):
     
     loss = 0
     current_loss = 0 
-    all_losses = []
     store_every = 2
 
     # Assuming optimizer has two groups.
-    scheduler = optim.lr_scheduler.StepLR(IntraGRU_optimizer, 
-        step_size=25, gamma=0.5)
+    # scheduler = optim.lr_scheduler.StepLR(IntraGRU_optimizer, 
+    #     step_size=25, gamma=0.5)
     
 
-    for Epoch in range(101):
-        iteration = 0
-        scheduler.step()
-
+    for Epoch in range(Train_Epoch):
         for key_userid, training_batch in tqdm.tqdm(training_batches.items()):
 
-            # Zero gradients
-            IntraGRU_optimizer.zero_grad()
-
-            input_variable, lengths, rating , asin_index, reviewerID_index = training_batch
+            input_variable, lengths, ratings , asin_index, reviewerID_index = training_batch
 
             # Set device options
+            np_input_variable = input_variable.numpy()
+
+            # Delete column at index -label4training to end
+            np_input_variable = np.delete(np_input_variable,
+                 [val for val in range(batch_size, batch_size-label4training-1, -1)],
+                  axis=1)
+            input_variable = torch.from_numpy(np_input_variable)
             input_variable = input_variable.to(device)
-            lengths = lengths.to(device)
-            asin_index = asin_index.to(device)
-            reviewerID_index = reviewerID_index.to(device)
 
-            # Forward pass through encoder
-            outputs, intra_hidden, intra_attn_score, inter_attn_score = IntraGRU(input_variable, lengths, 
-                asin_index, reviewerID_index)
+            lengths = lengths[:batch_size-label4training].to(device)
 
-
-            # Calculate Loss
-            normalize_rating = (rating - 1)/ (5-1)
-            normalize_rating = normalize_rating.to(device)
-
-            err = outputs.squeeze(1) - normalize_rating
-            loss = torch.sum(torch.mul(err, err) , dim = 0)
-            # loss = loss/len(rating)   # average
+            # Last "label4training" values
+            asin_index = asin_index[-label4training:].to(device)
+            reviewerID_index = reviewerID_index[-label4training:].to(device)
             
-            loss.backward()
-            current_loss += loss
+            normalize_ratings = (ratings-1)/(5-1)
+            normalize_ratings = normalize_ratings[-label4training:]
 
-            IntraGRU_optimizer.step()
             
-            iteration += 1
+
+            # User personal loss
+            user_loss = 0
+            user_row_count = 0
+
+            for reviewerID, asin, true_rating in zip(asin_index, reviewerID_index, normalize_ratings):
+
+                # Zero gradients
+                IntraGRU_optimizer.zero_grad()
+
+                reviewerID = reviewerID.unsqueeze(0) 
+                asin = asin.unsqueeze(0)
+                
+                true_rating = true_rating.to(device)
+                true_rating = true_rating.unsqueeze(0)
+
+                # Forward pass through encoder
+                outputs, intra_hidden, intra_attn_score, inter_attn_score = IntraGRU(input_variable, lengths, 
+                    asin, reviewerID)
+
+                outputs = outputs.squeeze(0)
+                
+                # Calculate Loss
+                try:
+                    err = outputs - true_rating
+                    loss = torch.mul(err, err)
+                    user_loss += loss
+                    
+                    loss.backward()
+                    IntraGRU_optimizer.step()    
+                    user_row_count+=1                
+                    pass
+                except RuntimeError as identifier:
+                    with open(R'ReviewsPrediction_Model/model/{}/Error.txt'.format(directory),'a') as file:
+                        file.write('User :{}\tErorr :{}\n'.format(key_userid, identifier))
+                    pass
+                # err = (outputs*(5-1)+1) - true_rating
+
+
+            user_loss = user_loss/user_row_count
+            current_loss += user_loss
+        
+        # scheduler.step()
         
         # all_losses.append(current_loss / len(training_batches))
         current_loss_average = current_loss / len(training_batches)
         current_loss = 0
 
-        print('Epoch:{}\tSE:{}\tLR:{}'.format(Epoch, current_loss_average,scheduler.get_lr()))
-        # print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
+        # print('Epoch:{}\tSE:{}\tLR:{}'.format(Epoch, current_loss_average,scheduler.get_lr()))
+        print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
 
         if Epoch % store_every == 0 and True:
-            torch.save(IntraGRU, R'{}ReviewsPrediction_{}'.format(directory, Epoch))
+            torch.save(IntraGRU, R'ReviewsPrediction_Model/model/{}/ReviewsPrediction_{}'.format(directory, Epoch))
         
         if WriteTrainLoss:
-            with open(R'{}TrainingLoss.txt'.format(directory),'a') as file:
-                # file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))
-                file.write('Epoch:{}\tSE:{}\tLR:{}\n'.format(Epoch, current_loss_average, scheduler.get_lr()))
+            with open(R'ReviewsPrediction_Model/Loss/{}/TrainingLoss.txt'.format(directory),'a') as file:
+                file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))
+                # file.write('Epoch:{}\tSE:{}\tLR:{}\n'.format(Epoch, current_loss_average, scheduler.get_lr()))
 
 
 # tensorboard --logdir=data/ --host localhost --port 8088
@@ -575,7 +620,7 @@ def Variables2Sentences(voc, input_variable, batch_size = 15):
     return sentences
 
 #%%
-def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes = 7, output_count = 3, CalculateAttn = True):
+def evaluate(model , voc , itemObj, userObj, training_batches, validation_batches, batches_indexes = 7, output_count = 3, CalculateAttn = True):
 
     evaluator = Evaluate(model)
     current_loss = 0
@@ -585,9 +630,9 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
     USER_ATTN_RECORD = list()
 
     for userid, validation_batch in tqdm.tqdm(validation_batches.items()):
-    # for userid, validation_batch in validation_batches.items():
         
-        input_variable, lengths, rating , asin_index, reviewerID_index = validation_batch
+        _, _, ratings , asin_index, reviewerID_index = validation_batch     # rating , asin for validation
+        input_variable, lengths, _ , _, _ = training_batches[userid]        # user personal reviews record
         
         """
         Getting input_sentences
@@ -604,12 +649,29 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
         lengths = lengths.to(device)
         asin_index = asin_index.to(device)
         reviewerID_index = reviewerID_index.to(device)
-        rating = rating.to(device)
+        ratings = ratings.to(device)
         
-        with torch.no_grad():
-            # Evaluate
-            outputs, hidden, intra_attn_score, inter_attn_score = evaluator(input_variable, lengths, 
-                asin_index, reviewerID_index)       
+        user_loss = 0
+        for reviewerID, asin, true_rating in zip(asin_index, reviewerID_index, ratings):
+            
+            reviewerID = reviewerID.unsqueeze(0) 
+            asin = asin.unsqueeze(0)
+            true_rating = true_rating.unsqueeze(0)
+
+            with torch.no_grad():
+                outputs, hidden, intra_attn_score, inter_attn_score = evaluator(input_variable, lengths, 
+                    asin, reviewerID)       
+                
+            outputs = outputs.squeeze(0)
+            
+            err = (outputs*(5-1)+1) - true_rating
+            loss = torch.mul(err, err)  
+            loss = math.sqrt(loss)
+            user_loss += loss
+
+            reviews_counter += 1
+        
+        current_loss += user_loss
 
         # Attention record
         if(CalculateAttn):
@@ -645,48 +707,54 @@ def evaluate(model , voc , itemObj, userObj, validation_batches, batches_indexes
             pass
 
         # Calculate loss (count from batches_indexes)
-        outputs = outputs[batches_indexes:].squeeze()
-        normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
-        err = outputs - normalize_rating
 
-        single_user_total_loss = torch.sum(torch.mul(err, err) , dim = 0)
+        # outputs = outputs[batches_indexes:].squeeze()
+        # normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
+        # err = outputs - normalize_rating
+        # single_user_total_loss = torch.sum(torch.mul(err, err) , dim = 0)
         
-        current_loss += single_user_total_loss
-        reviews_counter += len(rating[batches_indexes:])
+        # current_loss += single_user_total_loss
+        # reviews_counter += len(rating[batches_indexes:])
 
-        if(not True):
-            print('==================================')
-            print(normalize_rating)
-            print(outputs.cpu().detach().numpy())
-            print(current_loss)
-            
-        pass
         
-    RMSE = math.sqrt(
-        current_loss/reviews_counter
-    )
+    RMSE = current_loss/reviews_counter
 
     return RMSE, USER_ATTN_RECORD
 
 #%%
 
-"""
-Evalution
-"""
+# """
+# Evalution
+# """
 # USE_CUDA = torch.cuda.is_available()
 # device = torch.device("cuda" if USE_CUDA else "cpu")
     
 # # Load in training batches
-# res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=2000)
+# res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=200)
 
 # #%%
-# validation_batches = GenerateBatches(
+# training_batches, validation_batch = GenerateBatches(
 #     res, 
 #     itemObj,
 #     userObj,
-#     batch_size = 15
+#     batch_size = 12
 #     )
 # #%%
+# input_variable, lengths, rating , asin_index, reviewerID_index = training_batches['A11FFLD0GV82CQ']
+# input_variable_val, lengths, rating_val , asin_index_val, reviewerID_index_val = validation_batch['A11FFLD0GV82CQ']
+# #%%
+# asin_index, reviewerID_index,asin_index_val,reviewerID_index_val
+# #%%
+# lengths, rating , asin_index, reviewerID_index
+# #%%
+# np_input_variable = input_variable.numpy()
+# # Delete column at index 1
+# np_input_variable = np.delete(np_input_variable, [1,-1], axis=1)
+# np_input_variable.shape, np_input_variable
+# #%%
+# [val for val in range(15,12,-1)]
+
+#%%
 # """
 # Show RMSE
 # """
@@ -715,8 +783,8 @@ def WriteAttention(USER_ATTN_RECORD):
         
         index_ = 0
         for sentence in userRecordObj.intra_attn_score:
-            js( index_, sentence, directory)
-            index_ += 1
+            js( index_, sentence, directory)   
+            index_ += 1  
         
         with open(R'{}/Inter_Attn_Score.txt'.format(directory),'a') as file:
             count = 0
@@ -731,37 +799,29 @@ if __name__ == "__main__":
 
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = R'ReviewsPrediction_Model/1023_lr4e05_step25_ur5000/'
+    directory = R'1028_ur2500_'
 
     # Load in training batches
-    res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=5000)  
-    
+    res, itemObj, userObj = loadData(havingCount=25, LIMIT=2000)  
+    training_batches, validation_batches, myVoc = GenerateBatches(
+        res, 
+        itemObj, 
+        userObj,
+        batch_size = 20,
+        validation_batch_size=5
+    )    
     if(True):
-        training_batches = GenerateBatches(
-            res, 
-            itemObj, 
-            userObj,
-            batch_size = 12
-            
-        )
-        train(training_batches, myVoc, directory)
+        train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=20, WriteTrainLoss=True, label4training=5)
         pass
 
     if(True):
-        validation_batches = GenerateBatches(
-            res, 
-            itemObj,
-            userObj,
-            batch_size = 15
-            )
-
         for Epoch in range(0,102,2):
-            model = torch.load(R'{}ReviewsPrediction_{}'.format(directory, Epoch))
-            RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, 
+            model = torch.load(R'ReviewsPrediction_Model/model/{}/ReviewsPrediction_{}'.format(directory, Epoch))
+            RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, training_batches, validation_batches, 
                 batches_indexes = 12, output_count=3, CalculateAttn=False)
             
             print('Epoch: {}\tRMSE: {}'.format(Epoch, RMSE))
             
-            with open(R'{}ValidationLoss.txt'.format(directory),'a') as file:
+            with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
     pass

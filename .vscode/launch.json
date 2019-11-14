@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
             "name": "Python",
             "type": "python",
@@ -64,6 +65,14 @@
             "name": "Python: Current File (External Terminal)",
             "type": "python",
             "request": "launch",
+            "program": "${file}",
+            "console": "externalTerminal"
+        },
+        {
+            "name": "Python: Current File (External Terminal_)",
+            "type": "python",
+            "request": "launch",
+            "pythonPath": "/home/kdd2080ti/anaconda3/bin/python",
             "program": "${file}",
             "console": "externalTerminal"
         }

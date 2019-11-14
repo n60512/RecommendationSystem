@@ -64,8 +64,8 @@ class HANN(nn.Module):
         self.linear_beta = torch.nn.Linear(hidden_size, 1)
 
         self.inter_review = nn.GRU(hidden_size, hidden_size, n_layers,
-                          dropout=dropout, 
-                          bidirectional=True)
+                          dropout=dropout)
+                          
         
         self.out128 = nn.Linear(hidden_size*2 , self.latentK*2)
         self.out64 = nn.Linear(self.latentK*2, self.latentK)
@@ -102,15 +102,12 @@ class HANN(nn.Module):
         intra_outputs = torch.sum(new_outputs , dim = 0)    # output sum
 
         intra_outputs = intra_outputs.unsqueeze(dim=1)
-        stop=1
-        # intra_outputs = new_outputs
 
         # Forward pass through GRU
         outputs, current_hidden = self.inter_review(intra_outputs, hidden)
  
-        stop =1
         # Sum bidirectional GRU outputs
-        outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
+        # outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
 
         # Calculate element-wise product
         elm_w_product_inter = self.itemEmbedding(item_index) * self.userEmbedding(user_index)
@@ -124,10 +121,9 @@ class HANN(nn.Module):
         
         # Calculate attention score (size: [200,15,1])
         inter_attn_score = torch.softmax(weighting_score, dim = 0)
-        test_inter_attn_score = inter_attn_score.unsqueeze(dim=1)
-        stop = 1
+        inter_attn_score = inter_attn_score.unsqueeze(dim=1)
         
-        new_outputs = test_inter_attn_score * outputs
+        new_outputs = inter_attn_score * outputs
         new_outputs_sum = torch.sum(new_outputs , dim = 0)    
 
         # Concat. interaction vector & GRU output
@@ -140,19 +136,7 @@ class HANN(nn.Module):
         # 64 to 1 dimension
         new_outputs = self.out_(new_outputs)    
         sigmoid_outputs = torch.sigmoid(new_outputs)
-
-        if(False):
-            print('input_seq size:\n',input_seq.size())
-            print('embedded size:\n',embedded.size())
-            print('Output size:\n',outputs.size())
-            print('elm_w_product:\n',elm_w_product.size())
-            print(' x:\n',x.size())
-            print(' weighting_score:\n',weighting_score.size())
-            print(' inter_attn_score:\n',inter_attn_score.size())
-            print(' new_outputs:\n',new_outputs.size())
-            print('new_outputs_sum size:\n',new_outputs_sum.size())
-            stop =1
-        
+        sigmoid_outputs = sigmoid_outputs.squeeze(0)
 
         # Return output and final hidden state
         return sigmoid_outputs, current_hidden, intra_attn_score , inter_attn_score
@@ -249,7 +233,7 @@ def inputVar(l, voc):
     return padVar, lengths
                 
 # Returns all items for a given batch of pairs
-def batch2TrainData(myVoc, sentences, rating, this_asin, this_reviewerID, itemObj, userObj, isSort = False):
+def batch2TrainData(myVoc, sentences, rating, this_asin, this_reviewerID, itemObj, userObj, isSort = False, normalizeRating = False):
     sentences_rating_pair = list()
     for index in range(len(sentences)):
         sentences_rating_pair.append(
@@ -280,6 +264,10 @@ def batch2TrainData(myVoc, sentences, rating, this_asin, this_reviewerID, itemOb
         myVoc)
     
     label = torch.tensor([val for val in rating_batch])
+    # Wheather normalize rating
+    if(normalizeRating):
+        label = (label-1)/(5-1)
+
     # asin and reviewerID batch association
     asin_batch = torch.tensor([val for val in this_asin_batch])
     reviewerID_batch = torch.tensor([val for val in this_reviewerID_batch])
@@ -288,7 +276,7 @@ def batch2TrainData(myVoc, sentences, rating, this_asin, this_reviewerID, itemOb
 
 #%%
 def Read_Asin_Reviewer():
-    with open('asin.csv','r') as file:
+    with open('asin_1.csv','r') as file:
         content = file.read()
         asin = content.split(',')
         print('asin count : {}'.format(len(asin)))
@@ -330,6 +318,8 @@ def loadData(havingCount = 15, LIMIT=5000):
         'FROM review , metadata ' +
         'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
         'AND review.`asin` = metadata.`asin` ' +
+        'AND review.`reviewerID` != \'A28EMTHVF120XV\' ' +
+        'AND review.`reviewerID` != \'A28HUBMSCXVQW0\' ' +
         'ORDER BY reviewerID,unixReviewTime ASC ;'
     )
 
@@ -444,14 +434,14 @@ def train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=15, Wr
     asin, reviewerID = Read_Asin_Reviewer()
 
     # Initialize textual embeddings
-    embedding = nn.Embedding(myVoc.num_words, hidden_size)
+    embedding = nn.Embedding(myVoc.num_words+1, hidden_size)
 
     # Initialize asin/reviewer embeddings
-    asin_embedding = nn.Embedding(len(asin), hidden_size)
-    reviewerID_embedding = nn.Embedding(len(reviewerID), hidden_size)
+    asin_embedding = nn.Embedding(len(asin)+1, hidden_size)
+    reviewerID_embedding = nn.Embedding(len(reviewerID)+1, hidden_size)
 
     # Initialize encoder & decoder models
-    IntraGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding, n_layers=1, dropout=0.5)
+    IntraGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding, n_layers=1, dropout=0)
     # Use appropriate device
     IntraGRU = IntraGRU.to(device)
     print('Models built and ready to go!')
@@ -488,8 +478,8 @@ def train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=15, Wr
 
             # Delete column at index -label4training to end
             np_input_variable = np.delete(np_input_variable,
-                 [val for val in range(batch_size, batch_size-label4training-1, -1)],
-                  axis=1)
+                [val for val in range(batch_size, batch_size-label4training-1, -1)],
+                axis=1)
             input_variable = torch.from_numpy(np_input_variable)
             input_variable = input_variable.to(device)
 
@@ -498,39 +488,31 @@ def train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=15, Wr
             # Last "label4training" values
             asin_index = asin_index[-label4training:].to(device)
             reviewerID_index = reviewerID_index[-label4training:].to(device)
-            
-            normalize_ratings = (ratings-1)/(5-1)
-            normalize_ratings = normalize_ratings[-label4training:]
-
-            
-
+            ratings = ratings[-label4training:].to(device)
+                
             # User personal loss
             user_loss = 0
             user_row_count = 0
 
-            for reviewerID, asin, true_rating in zip(asin_index, reviewerID_index, normalize_ratings):
+            for reviewerID, asin, true_rating in zip(asin_index, reviewerID_index, ratings):
 
                 # Zero gradients
                 IntraGRU_optimizer.zero_grad()
 
                 reviewerID = reviewerID.unsqueeze(0) 
                 asin = asin.unsqueeze(0)
-                
-                true_rating = true_rating.to(device)
                 true_rating = true_rating.unsqueeze(0)
 
                 # Forward pass through encoder
                 outputs, intra_hidden, intra_attn_score, inter_attn_score = IntraGRU(input_variable, lengths, 
                     asin, reviewerID)
-
-                outputs = outputs.squeeze(0)
-                
+                    
                 # Calculate Loss
                 try:
-                    err = outputs - true_rating
+                    err = (outputs*(5-1)+1) - true_rating
                     loss = torch.mul(err, err)
                     user_loss += loss
-                    
+                        
                     loss.backward()
                     IntraGRU_optimizer.step()    
                     user_row_count+=1                
@@ -539,15 +521,11 @@ def train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=15, Wr
                     with open(R'ReviewsPrediction_Model/model/{}/Error.txt'.format(directory),'a') as file:
                         file.write('User :{}\tErorr :{}\n'.format(key_userid, identifier))
                     pass
-                # err = (outputs*(5-1)+1) - true_rating
-
 
             user_loss = user_loss/user_row_count
             current_loss += user_loss
-        
-        # scheduler.step()
-        
-        # all_losses.append(current_loss / len(training_batches))
+            pass
+                
         current_loss_average = current_loss / len(training_batches)
         current_loss = 0
 
@@ -663,7 +641,8 @@ def evaluate(model , voc , itemObj, userObj, training_batches, validation_batche
                     asin, reviewerID)       
                 
             outputs = outputs.squeeze(0)
-            
+
+            # Calculate loss (count from batches_indexes)    
             err = (outputs*(5-1)+1) - true_rating
             loss = torch.mul(err, err)  
             loss = math.sqrt(loss)
@@ -706,17 +685,6 @@ def evaluate(model , voc , itemObj, userObj, training_batches, validation_batche
             USER_ATTN_RECORD.append(SingleUAR)
             pass
 
-        # Calculate loss (count from batches_indexes)
-
-        # outputs = outputs[batches_indexes:].squeeze()
-        # normalize_rating = (rating[batches_indexes:] - 1)/ (5-1)
-        # err = outputs - normalize_rating
-        # single_user_total_loss = torch.sum(torch.mul(err, err) , dim = 0)
-        
-        # current_loss += single_user_total_loss
-        # reviews_counter += len(rating[batches_indexes:])
-
-        
     RMSE = current_loss/reviews_counter
 
     return RMSE, USER_ATTN_RECORD
@@ -729,44 +697,22 @@ def evaluate(model , voc , itemObj, userObj, training_batches, validation_batche
 # USE_CUDA = torch.cuda.is_available()
 # device = torch.device("cuda" if USE_CUDA else "cpu")
     
-# # Load in training batches
-# res, myVoc, itemObj, userObj = loadData(havingCount=15, LIMIT=200)
-
 # #%%
-# training_batches, validation_batch = GenerateBatches(
+# res, itemObj, userObj = loadData(havingCount=10, LIMIT=200)  
+# training_batches, validation_batches, myVoc = GenerateBatches(
 #     res, 
-#     itemObj,
+#     itemObj, 
 #     userObj,
-#     batch_size = 12
-#     )
+#     batch_size = 7,
+#     validation_batch_size=3
+# )    
 # #%%
-# input_variable, lengths, rating , asin_index, reviewerID_index = training_batches['A11FFLD0GV82CQ']
-# input_variable_val, lengths, rating_val , asin_index_val, reviewerID_index_val = validation_batch['A11FFLD0GV82CQ']
-# #%%
-# asin_index, reviewerID_index,asin_index_val,reviewerID_index_val
-# #%%
-# lengths, rating , asin_index, reviewerID_index
-# #%%
-# np_input_variable = input_variable.numpy()
-# # Delete column at index 1
-# np_input_variable = np.delete(np_input_variable, [1,-1], axis=1)
-# np_input_variable.shape, np_input_variable
-# #%%
-# [val for val in range(15,12,-1)]
+# directory = R'test'
+# train(training_batches, myVoc, directory, Train_Epoch=10, batch_size=7, WriteTrainLoss=True, label4training=2)
 
 #%%
-# """
-# Show RMSE
-# """
-# for index in range(0,102,2):
-#     model = torch.load(R'ReviewsPrediction_Model/1021/ReviewsPrediction_{}'.format(index))
-#     RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, 
-#         batches_indexes = 12, output_count=3, CalculateAttn=False)
-#     print('Epoch: {}\tRMSE: {}'.format(index, RMSE))
 
-#%%
-# model = torch.load(R'ReviewsPrediction_Model/1020/ReviewsPrediction_{}'.format(40))
-# RMSE, USER_ATTN_RECORD = evaluate(model ,  myVoc, itemObj, userObj, validation_batches, batches_indexes = 12)
+
 
 #%%
 """
@@ -799,10 +745,10 @@ if __name__ == "__main__":
 
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = R'1028_ur2500_'
+    directory = R'test'
 
     # Load in training batches
-    res, itemObj, userObj = loadData(havingCount=25, LIMIT=2000)  
+    res, itemObj, userObj = loadData(havingCount=25, LIMIT=200)  
     training_batches, validation_batches, myVoc = GenerateBatches(
         res, 
         itemObj, 
@@ -825,3 +771,10 @@ if __name__ == "__main__":
             with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
     pass
+
+#%%
+a = 'B00L26YDA4,B00L3YHF6O,B00LGQ6HL8'
+a.split(',')
+len(a.split(',')),a.split(',')
+
+# %%
