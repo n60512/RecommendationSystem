@@ -276,7 +276,7 @@ def batch2TrainData(myVoc, sentences, rating, this_asin, this_reviewerID, itemOb
 
 #%%
 def Read_Asin_Reviewer():
-    with open('asin_1.csv','r') as file:
+    with open('asin.csv','r') as file:
         content = file.read()
         asin = content.split(',')
         print('asin count : {}'.format(len(asin)))
@@ -289,7 +289,7 @@ def Read_Asin_Reviewer():
     return asin, reviewerID
 
 #%% Load dataset from database
-def loadData(havingCount = 15, LIMIT=5000):
+def loadData(havingCount = 15, LIMIT=5000, testing=False, table=''):
 
     print('Loading asin/reviewerID from cav file...')
     asin, reviewerID = Read_Asin_Reviewer()
@@ -304,24 +304,48 @@ def loadData(havingCount = 15, LIMIT=5000):
     st = time.time()
     print('Loading dataset from database...') 
 
-    sql = (
-        'WITH tenReviewsUp AS ( ' +
-        '		SELECT reviewerID ' +
-        '		FROM review ' +
-        '		group by reviewerID ' +
-        '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
-        '		limit {} '.format(LIMIT) +
-        '	) ' +
-        'SELECT ' +
-        'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
-        'review.`ID`, review.reviewerID , review.`asin`, review.overall, review.reviewText, review.unixReviewTime ' +
-        'FROM review , metadata ' +
-        'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
-        'AND review.`asin` = metadata.`asin` ' +
-        'AND review.`reviewerID` != \'A28EMTHVF120XV\' ' +
-        'AND review.`reviewerID` != \'A28HUBMSCXVQW0\' ' +
-        'ORDER BY reviewerID,unixReviewTime ASC ;'
-    )
+    if(not testing):
+        # load training user data
+        sql = (
+            'WITH tenReviewsUp AS ( ' +
+            '		SELECT reviewerID ' +
+            '		FROM {}review '.format(table) +
+            '		group by reviewerID ' +
+            '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
+            '		limit {} '.format(LIMIT) +
+            '	) ' +
+            'SELECT ' +
+            'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
+            '{}review.`ID`, {}review.reviewerID , {}review.`asin`, {}review.overall, {}review.reviewText, {}review.unixReviewTime '.format(table, table, table, table, table, table) +
+            'FROM {}review , {}metadata '.format(table, table) +
+            'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
+            'AND {}review.`asin` = {}metadata.`asin` '.format(table, table) +
+            'ORDER BY reviewerID,unixReviewTime ASC ;'
+        )
+    else:
+        sql = (
+            'WITH tenReviewsUp AS ( ' +
+            '		SELECT reviewerID ' +
+            '		FROM review ' +
+            'WHERE reviewerID  NOT IN ' +
+            '( ' +
+            '   SELECT reviewerID ' +
+            '   FROM training_2000 ' +
+            ') ' +
+            '		group by reviewerID ' +
+            '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
+            '		limit {} '.format(LIMIT) +
+            '	) ' +
+            'SELECT ' +
+            'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
+            'review.`ID`, review.reviewerID , review.`asin`, review.overall, review.reviewText, review.unixReviewTime ' +
+            'FROM review , metadata ' +
+            'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
+            'AND review.`asin` = metadata.`asin` ' +
+            'ORDER BY reviewerID,unixReviewTime ASC ;'
+        )
+
+    print(sql)
 
     conn = DBConnection()
     res = conn.selection(sql)
@@ -745,19 +769,19 @@ if __name__ == "__main__":
 
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = R'test'
+    directory = R'1114_toys_singleIntra_lr1e05'
 
     # Load in training batches
-    res, itemObj, userObj = loadData(havingCount=25, LIMIT=200)  
+    res, itemObj, userObj = loadData(havingCount=15, LIMIT=500, testing=False, table='')
     training_batches, validation_batches, myVoc = GenerateBatches(
         res, 
         itemObj, 
         userObj,
-        batch_size = 20,
+        batch_size = 10,
         validation_batch_size=5
     )    
     if(True):
-        train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=20, WriteTrainLoss=True, label4training=5)
+        train(training_batches, myVoc, directory, Train_Epoch=101, batch_size=10, WriteTrainLoss=True, label4training=5)
         pass
 
     if(True):
@@ -771,10 +795,3 @@ if __name__ == "__main__":
             with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
     pass
-
-#%%
-a = 'B00L26YDA4,B00L3YHF6O,B00LGQ6HL8'
-a.split(',')
-len(a.split(',')),a.split(',')
-
-# %%
