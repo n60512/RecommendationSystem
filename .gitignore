@@ -1,2 +1,4 @@
 AttentionVisualize/*
 ReviewsPrediction_Model/model
+UserModel/DBconnector.py
+DBconnector.py
