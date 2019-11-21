@@ -270,6 +270,25 @@ def loadData(havingCount = 15, LIMIT=5000, testing=False, table=''):
 
     if(not testing):
         # load training user data
+
+        ## this sql select base on metadata
+        # sql = (
+        #     'WITH tenReviewsUp AS ( ' +
+        #     '		SELECT reviewerID ' +
+        #     '		FROM {}review '.format(table) +
+        #     '		group by reviewerID ' +
+        #     '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
+        #     '		limit {} '.format(LIMIT) +
+        #     '	) ' +
+        #     'SELECT ' +
+        #     'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
+        #     '{}review.`ID`, {}review.reviewerID , {}review.`asin`, {}review.overall, {}review.reviewText, {}review.unixReviewTime '.format(table, table, table, table, table, table) +
+        #     'FROM {}review , {}metadata '.format(table, table) +
+        #     'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
+        #     'AND {}review.`asin` = {}metadata.`asin` '.format(table, table) +
+        #     'ORDER BY reviewerID,unixReviewTime ASC ;'
+        # )
+
         sql = (
             'WITH tenReviewsUp AS ( ' +
             '		SELECT reviewerID ' +
@@ -281,11 +300,11 @@ def loadData(havingCount = 15, LIMIT=5000, testing=False, table=''):
             'SELECT ' +
             'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
             '{}review.`ID`, {}review.reviewerID , {}review.`asin`, {}review.overall, {}review.reviewText, {}review.unixReviewTime '.format(table, table, table, table, table, table) +
-            'FROM {}review , {}metadata '.format(table, table) +
+            'FROM {}review '.format(table) +
             'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
-            'AND {}review.`asin` = {}metadata.`asin` '.format(table, table) +
             'ORDER BY reviewerID,unixReviewTime ASC ;'
         )
+
     else:
         sql = (
             'WITH tenReviewsUp AS ( ' +
@@ -294,7 +313,7 @@ def loadData(havingCount = 15, LIMIT=5000, testing=False, table=''):
             'WHERE reviewerID  NOT IN ' +
             '( ' +
             '   SELECT reviewerID ' +
-            '   FROM toys_training_1000 ' +
+            '   FROM {}training_2000 '.format(table) +
             ') ' +
             '		group by reviewerID ' +
             '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
@@ -614,7 +633,7 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
     return group_loss
 
 #%%
-def Train(myVoc, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
+def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
     directory, TrainEpoch=100, isStoreModel=False, WriteTrainLoss=False, store_every = 2):
 
     """
@@ -623,7 +642,7 @@ def Train(myVoc, training_batches, candidate_asins, candidate_reviewerIDs, train
 
     hidden_size = 300
     # Get asin and reviewerID from file
-    asin, reviewerID = Read_Asin_Reviewer()
+    asin, reviewerID = Read_Asin_Reviewer(table)
     # Initialize textual embeddings
     embedding = nn.Embedding(myVoc.num_words, hidden_size)
     # Initialize asin/reviewer embeddings
@@ -631,7 +650,8 @@ def Train(myVoc, training_batches, candidate_asins, candidate_reviewerIDs, train
     reviewerID_embedding = nn.Embedding(len(reviewerID), hidden_size)    
 
     # Configure training/optimization
-    learning_rate = 0.000001
+    # learning_rate = 0.000001  # toys
+    learning_rate = 0.0000005  # elec
     
     # Initialize IntraGRU models
     IntraGRU = list()
@@ -736,9 +756,10 @@ USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
     
 #%%
-# res, itemObj, userObj = loadData(havingCount=20, LIMIT=2000)  # for elec.
-res, itemObj, userObj = loadData(havingCount=15, LIMIT=1000, testing=False, table='toys_')  # for toys
-
+selectTable = 'clothing_'
+# res, itemObj, userObj = loadData(havingCount=20, LIMIT=2000, testing=False, table='elec_')  # for elec.
+# res, itemObj, userObj = loadData(havingCount=15, LIMIT=1000, testing=False, table='toys_')  # for toys
+res, itemObj, userObj = loadData(havingCount=15, LIMIT=1000, testing=False, table='clothing_')  # for clothing.
 #%%
 voc, USER = Generate_Voc_User(res, batch_size=10, validation_batch_size=5)    # 
 num_of_reviews = 9
@@ -750,6 +771,7 @@ num_of_validate = 3
 for idx in range(len(USER)):
     if len(USER[idx].rating) <15:
         print('{} {}'.format(idx, len(USER[idx].rating)))    
+
 
 #%% Generate training labels
 training_batch_labels = list()
@@ -784,14 +806,14 @@ for idx in range(0, num_of_validate, 1):
 #%%
 training_batches = GenerateTrainingBatches(USER, voc, num_of_reviews=num_of_reviews, batch_size=batch_size)
 #%% Training
-directory = '1113_toys_lr1e06'
-if(not True):
-    Train(voc, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-        directory, TrainEpoch=100, isStoreModel=True, WriteTrainLoss=True, store_every = 2)
+directory = '1120_clothing_lr5e07'
+if(True):
+    Train(voc, selectTable, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
+        directory, TrainEpoch=50, isStoreModel=True, WriteTrainLoss=True, store_every = 2)
 
 #%% Evaluation
-if(not True):
-    for Epoch in range(0, 101, 2):
+if(True):
+    for Epoch in range(0, 51, 2):
         # Loading IntraGRU
         IntraGRU = list()
         for idx in range(num_of_reviews):
@@ -808,58 +830,60 @@ if(not True):
         with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
             file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
 
-#%%
-"""
-Testing
-"""
-#%% Loading esting data from database
-res, itemObj, userObj = loadData(havingCount=20, LIMIT=200, testing=True, table='toys_')
+# #%%
+# """
+# Testing
+# """
+# #%% Loading esting data from database
+# res, itemObj, userObj = loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
+# # res, itemObj, userObj = loadData(havingCount=20, LIMIT=200, testing=True, table='')   # toys
 
-#%%
-USER = Generate_Voc_User(res, batch_size=10, validation_batch_size=5, generateVoc=False)
-num_of_reviews = 9
-batch_size = 4
-num_of_rating = 3
-#%%
-len(USER), len(res)
+# #%%
+# USER = Generate_Voc_User(res, batch_size=10, validation_batch_size=5, generateVoc=False)
+# num_of_reviews = 9
+# batch_size = 4
+# num_of_rating = 3
+# #%%
+# len(USER), len(res)
 
-#%% Generate training labels
-testing_batch_labels = list()
-candidate_asins = list()
-candidate_reviewerIDs = list()
+# #%% Generate training labels
+# testing_batch_labels = list()
+# candidate_asins = list()
+# candidate_reviewerIDs = list()
 
-for idx in range(0, num_of_rating, 1):
+# for idx in range(0, num_of_rating, 1):
 
-    testing_labels, testing_asins, testing_reviewerIDs = GenerateLabelEncoding(USER, 
-        num_of_reviews+idx, 1)
+#     testing_labels, testing_asins, testing_reviewerIDs = GenerateLabelEncoding(USER, 
+#         num_of_reviews+idx, 1)
     
-    _batch_labels, _asins, _reviewerIDs = GenerateBatchLabelCandidate(testing_labels, testing_asins, testing_reviewerIDs, batch_size)
+#     _batch_labels, _asins, _reviewerIDs = GenerateBatchLabelCandidate(testing_labels, testing_asins, testing_reviewerIDs, batch_size)
     
-    testing_batch_labels.append(_batch_labels)
-    candidate_asins.append(_asins)
-    candidate_reviewerIDs.append(_reviewerIDs)
+#     testing_batch_labels.append(_batch_labels)
+#     candidate_asins.append(_asins)
+#     candidate_reviewerIDs.append(_reviewerIDs)
 
-# %%
-testing_batches = GenerateTrainingBatches(USER, voc, num_of_reviews=num_of_reviews, batch_size=batch_size, testing=True)
-
-#%% Evaluation (testing data)
-directory = '1113_toys_lr1e06'
-for Epoch in range(0, 101, 2):
-    # Loading IntraGRU
-    IntraGRU = list()
-    for idx in range(num_of_reviews):
-        model = torch.load(R'ReviewsPrediction_Model/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx, Epoch))
-        IntraGRU.append(model)
-
-    # Loading InterGRU
-    InterGRU = torch.load(R'ReviewsPrediction_Model/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
-
-    # evaluating
-    RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs)
-    print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
-
-    with open(R'ReviewsPrediction_Model/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
-        file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
+# # %%
+# testing_batches = GenerateTrainingBatches(USER, voc, num_of_reviews=num_of_reviews, batch_size=batch_size, testing=True)
 
 
-# %%
+# #%% Evaluation (testing data)
+
+# for Epoch in range(0, 51, 2):
+#     # Loading IntraGRU
+#     IntraGRU = list()
+#     for idx in range(num_of_reviews):
+#         model = torch.load(R'ReviewsPrediction_Model/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx, Epoch))
+#         IntraGRU.append(model)
+
+#     # Loading InterGRU
+#     InterGRU = torch.load(R'ReviewsPrediction_Model/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
+
+#     # evaluating
+#     RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs)
+#     print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
+
+#     with open(R'ReviewsPrediction_Model/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
+#         file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
+
+
+# # %%
