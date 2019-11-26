@@ -1,5 +1,8 @@
 AttentionVisualize/*
 ReviewsPrediction_Model/model
+ReviewsPrediction_Model/SingleIntraGRU/model
+ReviewsPrediction_Model/UserItemFeature/model
 UserModel/DBconnector.py
 DBconnector.py
 UserModel_backup/*
+DBconnector.py
