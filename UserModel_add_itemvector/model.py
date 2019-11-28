@@ -64,7 +64,7 @@ class IntraReviewGRU(nn.Module):
 
 #%% 
 class HANN(nn.Module):
-    def __init__(self, hidden_size, embedding, itemEmbedding, userEmbedding, n_layers=1, dropout=0, latentK = 64):
+    def __init__(self, hidden_size, embedding, itemEmbedding, userEmbedding, n_layers=1, dropout=0, latentK = 64, isCatItemVec=False):
         super(HANN, self).__init__()
         
         self.n_layers = n_layers
@@ -78,20 +78,28 @@ class HANN(nn.Module):
         self.linear3 = torch.nn.Linear(hidden_size, hidden_size)
         self.linear4 = torch.nn.Linear(hidden_size, hidden_size)
         self.linear_beta = torch.nn.Linear(hidden_size, 1)
+        self.isCatItemVec = isCatItemVec
 
-        self.inter_review = nn.GRU(hidden_size*2, hidden_size, n_layers,
+        if(self.isCatItemVec):
+            GRU_InputSize = hidden_size*2
+        else:
+            GRU_InputSize = hidden_size
+
+        self.inter_review = nn.GRU(GRU_InputSize, hidden_size, n_layers,
                           dropout=dropout)
-                          
         
         self.out128 = nn.Linear(hidden_size*2 , self.latentK*2)
         self.out64 = nn.Linear(self.latentK*2, self.latentK)
         self.out_ = nn.Linear(self.latentK, 1)
 
     def forward(self, intra_outputs, this_item_index, item_index, user_index, hidden=None):
-
-        # Concat. intra output && item feature
-        item_feature = self.itemEmbedding(this_item_index)
-        inter_input = torch.cat((intra_outputs, item_feature), 2)
+        
+        if(self.isCatItemVec):
+            # Concat. intra output && item feature
+            item_feature = self.itemEmbedding(this_item_index)
+            inter_input = torch.cat((intra_outputs, item_feature), 2)
+        else:
+            inter_input = intra_outputs
 
         # Forward pass through GRU
         outputs, current_hidden = self.inter_review(inter_input, hidden)

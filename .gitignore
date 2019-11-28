@@ -6,3 +6,5 @@ UserModel/DBconnector.py
 DBconnector.py
 UserModel_backup/*
 DBconnector.py
+PretrainingEmb/*
+ReviewsPrediction_Model/NCF/model/*
