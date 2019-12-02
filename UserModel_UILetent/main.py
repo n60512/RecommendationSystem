@@ -42,7 +42,7 @@ def trainIteration(InterGRU, InterGRU_optimizer, training_batches,
 
             err = (outputs*(5-1)+1) - current_labels
             loss = torch.mul(err, err)
-            loss = loss.sum()/len(training_batches)
+            loss = torch.mean(loss, dim=0)
             
             # Perform backpropatation
             loss.backward()
@@ -56,7 +56,8 @@ def trainIteration(InterGRU, InterGRU_optimizer, training_batches,
 
 #%%
 def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-    directory, TrainEpoch=100, isStoreModel=False, WriteTrainLoss=False, store_every = 2):
+    directory, validate_batch_labels, validate_asins, validate_reviewerIDs, 
+    TrainEpoch=100, isStoreModel=False, WriteTrainLoss=False, store_every = 2):
 
     hidden_size = 300
     # Get asin and reviewerID from file
@@ -68,13 +69,8 @@ def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs
     reviewerID_embedding = nn.Embedding(len(reviewerID), hidden_size)    
 
     # Configure training/optimization
-    # learning_rate = 0.000001  # toys
-    learning_rate = 0.0000005  # elec
+    learning_rate = 0.00001  # elec
     
-    # Append GRU model asc
-    for idx in range(num_of_reviews):    
-        stop = 1
-
     # Initialize InterGRU models
     InterGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding,
             n_layers=1, dropout=0, latentK = 64)
@@ -88,19 +84,20 @@ def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs
     print('Models built and ready to go!')
 
     for Epoch in range(TrainEpoch):
-        """
-        Run multiple label for training HERE !!!! 
-        """
+
         # Run a training iteration with batch
         group_loss = trainIteration(InterGRU, InterGRU_optimizer, training_batches, 
             candidate_asins, candidate_reviewerIDs, training_batch_labels)
 
-        """
-        Run multiple label for training HERE !!!! 
-        """
         num_of_iter = len(training_batches[0])*len(training_batch_labels)
         current_loss_average = group_loss/num_of_iter
         print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
+
+        RMSE = evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs)
+
+        print('\tMSE:{}\t'.format(RMSE))
+        with open(R'ReviewsPrediction_Model/UserItemFeature/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
+            file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))        
 
         if(Epoch % store_every == 0 and isStoreModel):
             torch.save(InterGRU, R'ReviewsPrediction_Model/UserItemFeature/model/{}/InterGRU_epoch{}'.format(directory, Epoch))            
@@ -112,7 +109,7 @@ def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs
 #%%
 def evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs):
     group_loss = 0
-    for batch_ctr in tqdm.tqdm(range(len(training_batches[0]))): #how many batches
+    for batch_ctr in range(len(training_batches[0])): #how many batches
         for idx in range(len(validate_batch_labels)):
             for reviews_ctr in range(len(training_batches)): #loop review 1 to 5
                 
@@ -136,10 +133,7 @@ def evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, 
 
             err = (outputs*(5-1)+1) - current_labels
             loss = torch.mul(err, err)
-            # loss = torch.sqrt(loss)
-
-            loss = loss.sum()/len(training_batches) # this batch avg. loss
-            
+            loss = torch.mean(loss, dim=0)            
             group_loss += loss
 
     num_of_iter = len(training_batches[0])*len(validate_batch_labels)
@@ -149,11 +143,11 @@ def evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, 
 #%%
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
-directory = '1126_clothing_lr5e07'
+directory = '1201_clothing_bs16_lr1e05'
 
 trainingEpoch = 50
 
-trainOption = not True
+trainOption = True
 validationOption = True
 testOption = True
 
@@ -163,7 +157,7 @@ Setup for preprocessing
 """
 pre_work = Preprocess()
 num_of_reviews = 9
-batch_size = 4
+batch_size = 16
 num_of_rating = 3
 num_of_validate = 3
 
@@ -217,28 +211,29 @@ if(trainOption or validationOption):
 # %%
 if(trainOption):
     Train(voc, selectTable, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-        directory, TrainEpoch=trainingEpoch, isStoreModel=True, WriteTrainLoss=True, store_every = 2)
+        directory, validate_batch_labels, validate_asins, validate_reviewerIDs, 
+        TrainEpoch=trainingEpoch, isStoreModel=True, WriteTrainLoss=True, store_every = 2)
 
 #%% Evaluation
-if(validationOption):
-    for Epoch in range(0, trainingEpoch, 2):
+# if(validationOption):
+#     for Epoch in range(0, trainingEpoch, 2):
 
-        # Loading InterGRU
-        InterGRU = torch.load(R'ReviewsPrediction_Model/UserItemFeature/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
+#         # Loading InterGRU
+#         InterGRU = torch.load(R'ReviewsPrediction_Model/UserItemFeature/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
 
-        # evaluating
-        RMSE = evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs)
-        print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
+#         # evaluating
+#         RMSE = evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs)
+#         print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
 
-        with open(R'ReviewsPrediction_Model/UserItemFeature/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
-            file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
+#         with open(R'ReviewsPrediction_Model/UserItemFeature/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
+#             file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
 
 #%% Testing
 if(testOption):
     
     # Loading testing data from database
     # res, itemObj, userObj = pre_work.loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
-    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
+    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
     # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='toys_', withOutTable='toys_training_1000')   # toys
     stop = 1
     USER = pre_work.Generate_Voc_User(res, batch_size=10, validation_batch_size=5, generateVoc=False)

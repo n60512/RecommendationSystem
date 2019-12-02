@@ -16,13 +16,7 @@ class HANN(nn.Module):
         self.hidden_size = hidden_size
         self.latentK = latentK
 
-        self.embedding = embedding
         self.itemEmbedding = itemEmbedding
-        self.userEmbedding = userEmbedding
-
-        self.linear3 = torch.nn.Linear(hidden_size, hidden_size)
-        self.linear4 = torch.nn.Linear(hidden_size, hidden_size)
-        self.linear_beta = torch.nn.Linear(hidden_size, 1)
 
         self.inter_review = nn.GRU(hidden_size, hidden_size, n_layers,
                           dropout=dropout)

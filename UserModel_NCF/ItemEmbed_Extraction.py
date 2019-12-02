@@ -13,7 +13,7 @@ USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 
 #%%
-model = torch.load(R'ReviewsPrediction_Model/NCF/model/1127_clothing_ncf_lr25e07/InterGRU_epoch22')
+model = torch.load(R'ReviewsPrediction_Model/NCF/model/1130_clothing_ncf_bs16_lr1e05/InterGRU_epoch2')
 
 #%%
 itemEmbed = model.itemEmbedding

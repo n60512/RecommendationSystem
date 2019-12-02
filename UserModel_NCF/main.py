@@ -40,7 +40,7 @@ def trainIteration(NCF_model, NCF_optimizer, batch_size, training_batches,
 
                 err = (outputs*(5-1)+1) - current_labels
                 loss = torch.mul(err, err)
-                loss = loss.sum()/batch_size
+                loss = torch.mean(loss, dim=0)
             
                 # Perform backpropatation
                 loss.backward()
@@ -68,7 +68,7 @@ def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs
 
     # Configure training/optimization
     # learning_rate = 0.000001  # toys
-    learning_rate = 0.0000025  # elec
+    learning_rate = 0.00001  # elec
     
 
     # Initialize NCF_model models
@@ -135,7 +135,8 @@ def evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins,
                 err = (outputs*(5-1)+1) - current_labels
                 loss = torch.mul(err, err)
 
-                loss = loss.sum()/batch_size # this batch avg. loss
+                # loss = loss.sum()/batch_size # this batch avg. loss
+                loss = torch.mean(loss, dim=0)
             
                 group_loss += loss/len(training_batches)
 
@@ -146,12 +147,12 @@ def evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins,
 #%%
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
-directory = '1127_clothing_ncf_lr25e07'
+directory = '1201_clothing_ncf_bs16_lr1e05'
 
 trainingEpoch = 50
 
-trainOption = True
-validationOption = True
+trainOption =not True
+validationOption =not True
 testOption = True
 
 # %%
@@ -160,7 +161,7 @@ Setup for preprocessing
 """
 pre_work = Preprocess()
 num_of_reviews = 9
-batch_size = 8
+batch_size = 16
 num_of_rating = 3
 num_of_validate = 3
 
@@ -236,7 +237,7 @@ if(testOption):
     
     # Loading testing data from database
     # res, itemObj, userObj = pre_work.loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
-    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
+    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
     # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='toys_', withOutTable='toys_training_1000')   # toys
     stop = 1
     USER = pre_work.Generate_Voc_User(res, batch_size=10, validation_batch_size=5, generateVoc=False)
@@ -266,7 +267,7 @@ if(testOption):
         NCF_model = torch.load(R'ReviewsPrediction_Model/NCF/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
 
         # evaluating
-        RMSE = evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, batch_size)
+        RMSE = evaluate(NCF_model, testing_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, batch_size)
         print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
 
         with open(R'ReviewsPrediction_Model/NCF/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
