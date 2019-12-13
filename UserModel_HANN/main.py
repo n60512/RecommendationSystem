@@ -5,15 +5,35 @@ import argparse
 from preprocessing import Preprocess
 from model import IntraReviewGRU, HANN
 import tqdm
-#%%
 import torch
 import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
+import random
 
 #%%
-def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, training_batches, training_asin_batches,
-    candidate_asins, candidate_reviewerIDs, training_batch_labels, isCatItemVec=False):
+def randomSelectNoneReview(tensor_, itemEmbedding, type_='z'):
+    # tensor_ size:[seq_size, batch_size, hidden_size]
+
+    # Iterate each user(batch) to give 'Random Val.'
+    for user in range(tensor_.size()[1]):
+
+        # Random amount of reviews
+        random_amount_of_reviews = random.randint(0, tensor_.size()[0]-1)
+
+        for i_ in range(random_amount_of_reviews):
+            select_random_seq = random.randint(0, tensor_.size()[0]-1)    
+            # Give random hidden a NONE REVIEW
+            if(type_=='z'):
+                tensor_[select_random_seq][user] = torch.zeros(tensor_.size()[2], dtype=torch.float)
+            elif(type_=='r'):
+                pass
+            elif(type_=='v'):
+                tensor_[select_random_seq][user] = itemEmbedding[select_random_seq][user]
+    return tensor_
+#%%
+def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, training_batches, training_item_batches,
+    candidate_items, candidate_users, training_batch_labels, isCatItemVec=False, RSNR=False):
     
     # Initialize this epoch loss
     epoch_loss = 0
@@ -34,8 +54,8 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
                 input_variable = input_variable.to(device)
                 lengths = lengths.to(device)
 
-                current_asins = torch.tensor(candidate_asins[idx][batch_ctr]).to(device)
-                current_reviewerIDs = torch.tensor(candidate_reviewerIDs[idx][batch_ctr]).to(device)
+                current_asins = torch.tensor(candidate_items[idx][batch_ctr]).to(device)
+                current_reviewerIDs = torch.tensor(candidate_users[idx][batch_ctr]).to(device)
 
                 outputs, intra_hidden, intra_attn_score = IntraGRU[reviews_ctr](input_variable, lengths, 
                     current_asins, current_reviewerIDs)
@@ -44,7 +64,7 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
 
                 if(isCatItemVec):
                     # Concat. asin feature
-                    this_asins = training_asin_batches[reviews_ctr][batch_ctr]
+                    this_asins = training_item_batches[reviews_ctr][batch_ctr]
                     this_asins = torch.tensor([val for val in this_asins]).to(device)
                     this_asins = this_asins.unsqueeze(0)
                 else:
@@ -59,6 +79,9 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
                     if(isCatItemVec):
                         interInput_asin = torch.cat((interInput_asin, this_asins) , 0) 
             
+            if(RSNR):
+                interInput = randomSelectNoneReview(interInput, InterGRU.itemEmbedding(interInput_asin), type_='v')
+
             outputs, intra_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
             outputs = outputs.squeeze(1)
             
@@ -82,9 +105,9 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
     return epoch_loss
 
 #%%
-def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-    validate_batch_labels, validate_asins, validate_reviewerIDs , directory, TrainEpoch=100, learning_rate = 0.00001, dropout=0, 
-    isStoreModel=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, isCatItemVec=False):
+def Train(myVoc, table, training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, 
+    validate_batch_labels, validate_asins, validate_reviewerIDs , directory, TrainEpoch=100, latentK=32, intra_method ='dualFC', inter_method='dualFC',
+     learning_rate = 0.00001, dropout=0, isStoreModel=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, isCatItemVec=False, RSNR=False):
 
     hidden_size = 300
     # Get asin and reviewerID from file
@@ -107,7 +130,7 @@ def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins
 
     # Append GRU model asc
     for idx in range(num_of_reviews):    
-        IntraGRU.append(IntraReviewGRU(hidden_size, embedding, asin_embedding, reviewerID_embedding))
+        IntraGRU.append(IntraReviewGRU(hidden_size, embedding, asin_embedding, reviewerID_embedding, method=intra_method))
         # Use appropriate device
         IntraGRU[idx] = IntraGRU[idx].to(device)
         IntraGRU[idx].train()
@@ -124,7 +147,7 @@ def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins
     
     # Initialize InterGRU models
     InterGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding,
-            n_layers=1, dropout=dropout, latentK = 32, isCatItemVec=isCatItemVec)
+            n_layers=1, dropout=dropout, latentK = latentK, isCatItemVec=isCatItemVec , method=inter_method)
     # Use appropriate device
     InterGRU = InterGRU.to(device)
     InterGRU.train()
@@ -141,8 +164,8 @@ def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins
 
     for Epoch in range(TrainEpoch):
         # Run a training iteration with batch
-        group_loss = trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, training_batches, training_asin_batches, 
-            candidate_asins, candidate_reviewerIDs, training_batch_labels, isCatItemVec=isCatItemVec)
+        group_loss = trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, training_batches, training_item_batches, 
+            candidate_items, candidate_users, training_batch_labels, isCatItemVec=isCatItemVec, RSNR=RSNR)
 
         inter_scheduler.step()
         for idx in range(num_of_reviews):
@@ -153,7 +176,10 @@ def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins
         print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
         
         # evaluating
-        RMSE = evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, isCatItemVec=isCatItemVec)
+        RMSE = evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, 
+            validate_batch_labels, validate_asins, validate_reviewerIDs, 
+            isCatItemVec=isCatItemVec, RSNR=RSNR)
+
         print('\tMSE:{}\t'.format(RMSE))
         with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
             file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
@@ -169,7 +195,7 @@ def Train(myVoc, table, training_batches, training_asin_batches, candidate_asins
                 file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))        
 
 #%%
-def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, isCatItemVec=False):
+def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, isCatItemVec=False, RSNR=False):
     group_loss = 0
     # for batch_ctr in tqdm.tqdm(range(len(training_batches[0]))): #how many batches
     for batch_ctr in range(len(training_batches[0])): #how many batches
@@ -202,6 +228,9 @@ def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, valida
                         interInput = torch.cat((interInput, outputs) , 0) 
                         interInput_asin = torch.cat((interInput_asin, this_asins) , 0) 
             
+            if(RSNR):
+                interInput = randomSelectNoneReview(interInput, InterGRU.itemEmbedding(interInput_asin), type_='v')
+
             with torch.no_grad():
                 outputs, intra_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
                 outputs = outputs.squeeze(1)
@@ -223,7 +252,7 @@ if __name__ == "__main__":
     
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = '1201_clothing_pre_cat_r6_bs16_lr1e05_lk32_dec20_dp5e01_nolimit_testset200'    
+    directory = '1211_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_allGeneral'
 
     # %%
     """
@@ -233,20 +262,26 @@ if __name__ == "__main__":
 
     # Parameters Setup
     trainOption = True
-    validationOption =True
+    validationOption = True
     testOption = True
 
+    intra_method = 'general'
+    inter_method = 'general'
+
     trainingEpoch = 50
-    num_of_reviews = 6
-    batch_size = 16
+    num_of_reviews = 4
+    batch_size = 40
     num_of_rating = 3
     num_of_validate = 3
-    store_every = 2
+    store_every = 1
+    latentK = 32
     learning_rate = 0.00001
-    dropout = 0.3
+    dropout = 0.5
 
     use_pretrain_item = True
     isCatItemVec = True
+    Train_RSNR =not True
+    Test_RSNR =not True
     
 
     selectTable = 'clothing_'
@@ -296,8 +331,9 @@ if __name__ == "__main__":
 
     if(trainOption):
         Train(voc, selectTable, training_batches, training_asin_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-            validate_batch_labels, validate_asins, validate_reviewerIDs, directory, TrainEpoch=trainingEpoch, learning_rate = learning_rate, 
-            dropout=dropout, isStoreModel=True, WriteTrainLoss=True, store_every = store_every, use_pretrain_item=use_pretrain_item, isCatItemVec=isCatItemVec)
+            validate_batch_labels, validate_asins, validate_reviewerIDs, directory, TrainEpoch=trainingEpoch, latentK=latentK, intra_method=intra_method , inter_method=inter_method,
+            learning_rate = learning_rate, dropout=dropout, isStoreModel=True, WriteTrainLoss=True, store_every = store_every, 
+            use_pretrain_item=use_pretrain_item, isCatItemVec=isCatItemVec, RSNR=Train_RSNR)
 
 
     # Testing
@@ -328,7 +364,7 @@ if __name__ == "__main__":
         testing_batches, testing_asin_batches = pre_work.GenerateTrainingBatches(USER, itemObj, voc, num_of_reviews=num_of_reviews, batch_size=batch_size, testing=True)
 
         # Evaluation (testing data)
-        for Epoch in range(0, trainingEpoch, 2):
+        for Epoch in range(0, trainingEpoch, store_every):
             # Loading IntraGRU
             IntraGRU = list()
             for idx in range(num_of_reviews):
@@ -339,7 +375,8 @@ if __name__ == "__main__":
             InterGRU = torch.load(R'ReviewsPrediction_Model/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
 
             # evaluating
-            RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs)
+            RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, 
+                isCatItemVec=isCatItemVec, RSNR=Test_RSNR)
             print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
 
             with open(R'ReviewsPrediction_Model/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
