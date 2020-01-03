@@ -143,7 +143,7 @@ def evaluate(InterGRU, training_batches, validate_batch_labels, validate_asins, 
 #%%
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
-directory = '1201_clothing_bs16_lr1e05'
+directory = '1203_clothing_r5_bs16_lr1e05'
 
 trainingEpoch = 50
 
@@ -156,7 +156,7 @@ testOption = True
 Setup for preprocessing
 """
 pre_work = Preprocess()
-num_of_reviews = 9
+num_of_reviews = 5
 batch_size = 16
 num_of_rating = 3
 num_of_validate = 3

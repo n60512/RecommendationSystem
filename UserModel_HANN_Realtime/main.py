@@ -109,9 +109,9 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
 
 #%%
 def Train(myVoc, table, training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, 
-    validate_batch_labels, validate_asins, validate_reviewerIDs , directory, TrainEpoch=100, latentK=32, intra_method ='dualFC', inter_method='dualFC',
+    validate_batch_labels=None, validate_asins=None, validate_reviewerIDs=None, directory='', TrainEpoch=100, latentK=32, intra_method ='dualFC', inter_method='dualFC',
      learning_rate = 0.00001, dropout=0, isStoreModel=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, isCatItemVec=False, 
-     RSNR=False, randomSetup=-1):
+     RSNR=False, randomSetup=-1, ifVal=False):
 
     hidden_size = 300
     # Get asin and reviewerID from file
@@ -179,23 +179,24 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
         current_loss_average = group_loss/num_of_iter
         print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
         
-        # evaluating
-        RMSE = evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, 
-            validate_batch_labels, validate_asins, validate_reviewerIDs, 
-            isCatItemVec=isCatItemVec, RSNR=RSNR, randomSetup=randomSetup)
+        if(ifVal):
+            # evaluating
+            RMSE = evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, 
+                validate_batch_labels, validate_asins, validate_reviewerIDs, 
+                isCatItemVec=isCatItemVec, RSNR=RSNR, randomSetup=randomSetup)
 
-        print('\tMSE:{}\t'.format(RMSE))
-        with open(R'ReviewsPrediction_Model/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
-            file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
+            print('\tMSE:{}\t'.format(RMSE))
+            with open(R'ReviewsPrediction_Model/RealTime/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
+                file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
 
 
         if(Epoch % store_every == 0 and isStoreModel):
-            torch.save(InterGRU, R'ReviewsPrediction_Model/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
+            torch.save(InterGRU, R'ReviewsPrediction_Model/RealTime/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
             for idx__, IntraGRU__ in enumerate(IntraGRU):
-                torch.save(IntraGRU__, R'ReviewsPrediction_Model/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx__, Epoch))
+                torch.save(IntraGRU__, R'ReviewsPrediction_Model/RealTime/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx__, Epoch))
                     
         if WriteTrainLoss:
-            with open(R'ReviewsPrediction_Model/Loss/{}/TrainingLoss.txt'.format(directory),'a') as file:
+            with open(R'ReviewsPrediction_Model/RealTime/Loss/{}/TrainingLoss.txt'.format(directory),'a') as file:
                 file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))        
 
 #%%
@@ -251,27 +252,12 @@ def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, valida
     RMSE = torch.sqrt(group_loss/num_of_iter)
     return RMSE
 
-def StoreWordSemantic(voc, idx, Epoch, dim, fname):
-    model = torch.load(R'ReviewsPrediction_Model/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx, Epoch))
-    
-    with open(fname, 'a') as _file:
-        _file.write('{} {}\n'.format(len(voc.index2word), dim))
-
-    for index in voc.index2word:
-        with open(fname, 'a') as _file:
-            tmpStrls = model.embedding(torch.tensor(index).to(device)).tolist()
-            tmpStr = ''
-            for val in tmpStrls:
-                tmpStr = tmpStr + str(val) + ' '
-            _file.write('{} {}\n'.format(voc.index2word[index], tmpStr))
-        
-
 #%%
 if __name__ == "__main__":
     
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = '1219_clothing_pre_cat_r4_bs40_lr5e05_lk32_dec20_dp0_interGeneral'
+    directory = '1226_clothing_nopre_r4_bs40_lr5e05_lk32_dec20_interGen_realtime'
 
     # %%
     """
@@ -280,11 +266,9 @@ if __name__ == "__main__":
     pre_work = Preprocess()
 
     # Parameters Setup
-    trainOption =not True
+    trainOption = True
     validationOption =not True
-    testOption = not True
-
-    StoreWordSemanticOption = not True
+    testOption = True
 
     intra_method = 'dualFC'
     inter_method = 'general'
@@ -292,36 +276,30 @@ if __name__ == "__main__":
     trainingEpoch = 30
     num_of_reviews = 4
     batch_size = 40
+    havingCount = 7
     num_of_rating = 3
     num_of_validate = 3
     store_every = 1
     latentK = 32
     learning_rate = 0.00005
     dropout = 0
-
+    
     use_pretrain_item = not True
     isCatItemVec = True
+
     Train_RSNR =not True
     Test_RSNR =not True
     randomSetup = 3
     
-    testRealtime =not False
     # For real-time testing
-    if(testRealtime):
-        through_table = True
-        user_based = False
-    else:
-        through_table = False
-        user_based = True
-        pass
+    through_table = True
+    user_based = False
 
     selectTable = 'clothing_'
-    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=2000, testing=False, table='clothing_')  # for clothing.
+    res, itemObj, userObj = pre_work.loadData(testing=False, table='clothing_', through_table=True)  # for clothing.
 
     # Generate voc & User information
-    voc, USER = pre_work.Generate_Voc_User(res, havingCount=15, limit_user=1000)
-
-
+    voc, USER = pre_work.Generate_Voc_User(res, havingCount=havingCount, limit_user=2500, user_based=user_based)
 
     # Generate training labels
     training_batch_labels = list()
@@ -355,6 +333,10 @@ if __name__ == "__main__":
             validate_batch_labels.append(_batch_labels)
             validate_asins.append(_asins)
             validate_reviewerIDs.append(_reviewerIDs)
+    else:
+        validate_batch_labels = None
+        validate_asins = None
+        validate_reviewerIDs = None
 
     # Generate training batches
     if(trainOption):
@@ -365,15 +347,14 @@ if __name__ == "__main__":
             validate_batch_labels, validate_asins, validate_reviewerIDs, directory, TrainEpoch=trainingEpoch, latentK=latentK, intra_method=intra_method , inter_method=inter_method,
             learning_rate = learning_rate, dropout=dropout, isStoreModel=True, WriteTrainLoss=True, store_every = store_every, 
             use_pretrain_item=use_pretrain_item, isCatItemVec=isCatItemVec, RSNR=Train_RSNR, randomSetup=randomSetup)
-    
+
 
     # Testing
     if(testOption):
         # Loading testing data from database
-        # res, itemObj, userObj = pre_work.loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
-        res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000', through_table=through_table)   # clothing
-        # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='toys_', withOutTable='toys_training_1000')   # toys
-        USER = pre_work.Generate_Voc_User(res, havingCount=15, generateVoc=False, user_based=user_based)
+        res, itemObj, userObj = pre_work.loadData(testing=True, table='clothing_', through_table=True)   # clothing
+        
+        USER = pre_work.Generate_Voc_User(res, havingCount=havingCount, generateVoc=False)
 
         # Generate testing labels
         testing_batch_labels = list()
@@ -399,19 +380,17 @@ if __name__ == "__main__":
             # Loading IntraGRU
             IntraGRU = list()
             for idx in range(num_of_reviews):
-                model = torch.load(R'ReviewsPrediction_Model/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx, Epoch))
+                model = torch.load(R'ReviewsPrediction_Model/RealTime/model/{}/IntraGRU_idx{}_epoch{}'.format(directory, idx, Epoch))
                 IntraGRU.append(model)
 
             # Loading InterGRU
-            InterGRU = torch.load(R'ReviewsPrediction_Model/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
+            InterGRU = torch.load(R'ReviewsPrediction_Model/RealTime/model/{}/InterGRU_epoch{}'.format(directory, Epoch))
 
             # evaluating
             RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, 
                 isCatItemVec=isCatItemVec, RSNR=Test_RSNR, randomSetup=randomSetup)
             print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
 
-            with open(R'ReviewsPrediction_Model/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
+            with open(R'ReviewsPrediction_Model/RealTime/Loss/{}/TestingLoss.txt'.format(directory),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
 
-    if(StoreWordSemanticOption):
-        StoreWordSemantic(voc, 0, 4, 300, 'torchWordEmbedding/WordSemantic_0101')

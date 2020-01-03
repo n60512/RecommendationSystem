@@ -8,3 +8,4 @@ UserModel_backup/*
 DBconnector.py
 PretrainingEmb/*
 ReviewsPrediction_Model/NCF/model/*
+ReviewsPrediction_Model/RealTime/model/*

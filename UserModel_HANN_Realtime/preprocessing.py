@@ -160,22 +160,27 @@ class Preprocess:
 
         if(not testing):
             # load training user data
-
-            sql = (
-                'WITH tenReviewsUp AS ( ' +
-                '		SELECT reviewerID ' +
-                '		FROM {}review '.format(table) +
-                '		group by reviewerID ' +
-                '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
-                '		limit {} '.format(LIMIT) +
-                '	) ' +
-                'SELECT ' +
-                'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
-                '{}review.`ID`, {}review.reviewerID , {}review.`asin`, {}review.overall, {}review.reviewText, {}review.unixReviewTime '.format(table, table, table, table, table, table) +
-                'FROM {}review '.format(table) +
-                'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
-                'ORDER BY reviewerID,unixReviewTime ASC ;'
-            )
+            if(through_table):
+                sql = (
+                    'SELECT clothing_realtime8_interaction8.*, clothing_review.`asin`, '+
+                    'clothing_review.overall, clothing_review.reviewText, clothing_review.unixReviewTime '+
+                    'FROM clothing_realtime8_interaction8, clothing_review '+
+                    'WHERE clothing_realtime8_interaction8.`ID`=clothing_review.`ID` '+
+                    'AND `No` <=10000 '+
+                    'ORDER BY `No` ;'                    
+                )
+            else:
+                sql = (
+                    'SELECT '+
+                    'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, '+
+                    'clothing_review.`ID`, clothing_review.reviewerID , clothing_review.`asin`, '+
+                    'clothing_review.overall, clothing_review.reviewText, clothing_review.unixReviewTime '+
+                    'FROM clothing_review, clothing_realtime_at6 '+
+                    'WHERE clothing_review.reviewerID = clothing_realtime_at6.reviewerID '+
+                    'AND clothing_review.unixReviewTime = clothing_realtime_at6.unixReviewTime '+
+                    'AND clothing_review.reviewerID IN (SELECT reviewerID FROM clothing_realtime_at6_training_1000)  '+
+                    'ORDER BY reviewerID,unixReviewTime ASC ;'
+                )
 
         else:
             if(through_table):
@@ -188,26 +193,16 @@ class Preprocess:
                     'AND `No` >20000 '+
                     'ORDER BY `No` ;'                    
                 )
-            else:
+            else:            
                 sql = (
-                    'WITH tenReviewsUp AS ( ' +
-                    '		SELECT reviewerID ' +
-                    '		FROM {}review '.format(table) +
-                    'WHERE reviewerID  NOT IN ' +
-                    '( ' +
-                    '   SELECT reviewerID ' +
-                    '   FROM {} '.format(withOutTable) +
-                    ') ' +
-                    '		group by reviewerID ' +
-                    '		HAVING COUNT(reviewerID) >= {} '.format(havingCount) +
-                    '		limit {} '.format(LIMIT) +
-                    '	) ' +
-                    'SELECT ' +
-                    'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, ' +
-                    '{}review.`ID`, {}review.reviewerID , {}review.`asin`, {}review.overall, {}review.reviewText, {}review.unixReviewTime '.format(table, table, table, table, table, table) +
-                    'FROM {}review , {}metadata '.format(table, table) +
-                    'WHERE reviewerID IN (SELECT * FROM tenReviewsUp) ' +
-                    'AND {}review.`asin` = {}metadata.`asin` '.format(table, table) +
+                    'SELECT '+
+                    'RANK() OVER (PARTITION BY reviewerID ORDER BY unixReviewTime,ID ASC) AS rank, '+
+                    'clothing_review.`ID`, clothing_review.reviewerID , clothing_review.`asin`, '+
+                    'clothing_review.overall, clothing_review.reviewText, clothing_review.unixReviewTime '+
+                    'FROM clothing_review, clothing_realtime_at6 '+
+                    'WHERE clothing_review.reviewerID = clothing_realtime_at6.reviewerID '+
+                    'AND clothing_review.unixReviewTime = clothing_realtime_at6.unixReviewTime '+
+                    'AND clothing_review.reviewerID IN (SELECT reviewerID FROM clothing_realtime_at6_testing_200)  '+
                     'ORDER BY reviewerID,unixReviewTime ASC ;'
                 )
 
@@ -222,10 +217,11 @@ class Preprocess:
         return res, itemObj, userObj
 
     # %%
-    def Generate_Voc_User(self, res, havingCount=10, limit_user=1000, generateVoc=True, user_based=True):
+    def Generate_Voc_User(self, res, havingCount=10, limit_user=1000, generateVoc=True, user_based=False):
         
         USER = list()
         LAST_USER = ''
+        LAST_NO = ''
         ctr = -1
         
         # Creating Voc
@@ -262,6 +258,10 @@ class Preprocess:
                                 res[index]['asin'],
                                 res[index]['reviewerID']
                             )
+                
+                tmp = res[index]['No'] 
+                USER[ctr]
+                stop=1
 
         print('User length:[{}]'.format(len(USER)))
         print('Voc creation complete. [{}]'.format(time.time()-st))

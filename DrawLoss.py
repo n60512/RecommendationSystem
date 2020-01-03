@@ -6,15 +6,15 @@ import io
 
 def clothing_compare():
     dir = dict()
-    modelName = ['clothing_r4_pre_cat_lk32', 'clothing_r4_pre_cat_lk32_RSNRtraintest',
-     'clothing_r4_pre_cat_lk32_RSNRtest']
+    modelName = ['alldualFC_1201', 'alldualFC_1217',
+     'ig_1217']
         # 'NCF', 
         # 'clothing_r_pregru_cat', 'clothing_r_prencf_cat', 'clothing_r_nopre_cat', 'clothing_r_pre_cat_nolimit',
         # 'clothing_r_pre_cat_nolimit_lk32_t200']
         
     dir[modelName[0]] = R'ReviewsPrediction_Model/Loss/1201_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_testset200_01/TestingLoss.txt'
-    dir[modelName[1]] = R'ReviewsPrediction_Model/Loss/1209_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_testset200_01_traintestRSNR/TestingLoss.txt'
-    dir[modelName[2]] = R'ReviewsPrediction_Model/Loss/1209_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_testset200_01_testRSNR/TestingLoss.txt'
+    dir[modelName[1]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr1e05_lk32_dec20_dualFC/TestingLoss.txt'
+    dir[modelName[2]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr5e05_lk32_dec20_intergeneral/TestingLoss_0.txt'
     # dir[modelName[3]] = R'ReviewsPrediction_Model/Loss/1201_clothing_pre_cat_r1_bs16_lr1e05_lk32_dec20_dp0_nolimit_testset200/TestingLoss.txt'
     
 
@@ -29,11 +29,20 @@ def clothing_compare():
 
 def clothing_bs_compare():
     dir = dict()
-    modelName = [ 'HANN', 'interGeneral', 'allGeneral']
+    modelName = [ 'interGeneral 4 (test on rt)', 'interGeneral rt_3day']
         
-    dir[modelName[0]] = R'ReviewsPrediction_Model/Loss/1201_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_testset200_01/TestingLoss.txt'
-    dir[modelName[1]] = R'ReviewsPrediction_Model/Loss/1201_clothing_pre_cat_r4_bs40_lr5e05_lk32_dec20_dp0_nolimit_testset200_interGeneral/TestingLoss.txt'
-    dir[modelName[2]] = R'ReviewsPrediction_Model/Loss/1211_clothing_pre_cat_r4_bs40_lr1e05_lk32_dec20_dp0_nolimit_allGeneral/TestingLoss.txt'
+    dir[modelName[0]] = R'ReviewsPrediction_Model/Loss/1219_clothing_pre_cat_r4_bs40_lr5e05_lk32_dec20_dp0_interGeneral/TestingLoss_realtimeTest.txt'
+    dir[modelName[1]] = R'ReviewsPrediction_Model/RealTime/Loss/1225_clothing_nopre_r4_bs40_lr5e05_lk32_dec20_interGen_realtime/TestingLoss.txt'
+    # TestingLoss_realtimeTest
+    return dir, modelName
+
+def clothing_bs_compare_():
+    dir = dict()
+    modelName = [ 'dualFC_full', 'interGeneral_full' ]
+        
+    dir[modelName[0]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr1e05_lk32_dec20_dualFC_RSNRv/TestingLoss_0.txt'
+    dir[modelName[1]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr5e05_lk32_dec20_intergeneral_RSNRv/TestingLoss_0.txt'
+    
     
 
     return dir, modelName
@@ -93,16 +102,17 @@ def drawBest(dir):
         minlist.append(min(modelList[mName]))
     
     print(minlist)
-    plt.plot([index+1 for index in range(len(minlist))], minlist ,'-o', label='loss')
+    plt.plot([index for index in range(len(minlist))], minlist ,'-o', label='loss')
     plt.legend(loc='best', framealpha=0.5, prop={'size': 'large', 'family': 'monospace'})
 
 
-saveName = '1209_clothing_attn_compare'
+saveName = '1225_clothing_realtime_compare_2'
 fig = plt.figure(figsize=(12, 8), dpi=288)
 
 # dir, modelName = clothing_compare()
 dir, modelName = clothing_bs_compare()
 # drawBest(dir)
+
 drawLoss(dir)
 
 fig.savefig(R'EvaluationImage/{}.png'.format(saveName), facecolor='w')
