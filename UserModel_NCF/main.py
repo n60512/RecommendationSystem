@@ -54,8 +54,7 @@ def trainIteration(NCF_model, NCF_optimizer, batch_size, training_batches,
 
 #%%
 def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-    validate_batch_labels, validate_asins, validate_reviewerIDs, directory, 
-    TrainEpoch=100, isStoreModel=False, WriteTrainLoss=False, store_every = 2, batch_size=4):
+    directory, TrainEpoch=100, isStoreModel=False, WriteTrainLoss=False, store_every = 2, batch_size=4):
 
     hidden_size = 300
     # Get asin and reviewerID from file
@@ -95,12 +94,12 @@ def Train(myVoc, table, training_batches, candidate_asins, candidate_reviewerIDs
         print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
 
 
-        # evaluating
-        RMSE = evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, batch_size)
-        print('\tMSE:{}\t'.format(RMSE))
+        # # evaluating
+        # RMSE = evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, batch_size)
+        # print('\tMSE:{}\t'.format(RMSE))
 
-        with open(R'ReviewsPrediction_Model/NCF/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
-            file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
+        # with open(R'ReviewsPrediction_Model/NCF/Loss/{}/ValidationLoss.txt'.format(directory),'a') as file:
+        #     file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))
 
 
         if(Epoch % store_every == 0 and isStoreModel):
@@ -147,11 +146,11 @@ def evaluate(NCF_model, training_batches, validate_batch_labels, validate_asins,
 #%%
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
-directory = '1201_clothing_ncf_bs16_lr1e05'
+directory = '0105_clothing_ncf_it6_lr1e05'
 
-trainingEpoch = 50
+trainingEpoch = 20
 
-trainOption =not True
+trainOption = True
 validationOption =not True
 testOption = True
 
@@ -160,18 +159,19 @@ testOption = True
 Setup for preprocessing
 """
 pre_work = Preprocess()
-num_of_reviews = 9
+num_of_reviews = 5
 batch_size = 16
-num_of_rating = 3
+num_of_rating = 1
 num_of_validate = 3
 
 # %%
 selectTable = 'clothing_'
-res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=1000, testing=False, table='clothing_')  # for clothing.
+res, itemObj, userObj = pre_work.loadData(havingCount=6, sqlfile="HNAE/SQL/cloth_interaction@6.sql",
+        LIMIT=1000, testing=False, table='clothing_')  # for clothing.
 # res, itemObj, userObj = loadData(havingCount=20, LIMIT=2000, testing=False, table='elec_')  # for elec.
 # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=1000, testing=False, table='toys_')  # for toys
 
-voc, USER = pre_work.Generate_Voc_User(res, batch_size=10, validation_batch_size=5)
+voc, USER = pre_work.Generate_Voc_User(res, havingCount=6)
 
 #%% Generate training labels
 training_batch_labels = list()
@@ -215,8 +215,7 @@ if(trainOption or validationOption):
 # %%
 if(trainOption):
     Train(voc, selectTable, training_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
-        validate_batch_labels, validate_asins, validate_reviewerIDs, directory, 
-        TrainEpoch=trainingEpoch, isStoreModel=True, WriteTrainLoss=True, store_every = 2, batch_size=batch_size)
+        directory, TrainEpoch=trainingEpoch, isStoreModel=True, WriteTrainLoss=True, store_every = 2, batch_size=batch_size)
 
 #%% Evaluation
 if(validationOption and False):
@@ -237,10 +236,11 @@ if(testOption):
     
     # Loading testing data from database
     # res, itemObj, userObj = pre_work.loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
-    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
-    # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='toys_', withOutTable='toys_training_1000')   # toys
+    res, itemObj, userObj = pre_work.loadData(havingCount=6, sqlfile="HNAE/SQL/cloth_interaction@6.sql", 
+        LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000')   # clothing
+
     stop = 1
-    USER = pre_work.Generate_Voc_User(res, batch_size=10, validation_batch_size=5, generateVoc=False)
+    USER = pre_work.Generate_Voc_User(res, havingCount=6, generateVoc=False)
 
     # Generate testing labels
     testing_batch_labels = list()

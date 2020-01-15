@@ -6,7 +6,7 @@ from gensim.models import KeyedVectors
 import sys
 
 # %%
-filename = 'torchWordEmbedding/WordSemantic_0101'
+filename = 'HNAE/data/trained_wordVector/interaction@15_review@4_withpre.vec'
 model = KeyedVectors.load_word2vec_format(filename, binary=False)
 
 

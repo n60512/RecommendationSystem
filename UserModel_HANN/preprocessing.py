@@ -143,7 +143,7 @@ class Preprocess:
         return asin, reviewerID
 
     #%% Load dataset from database
-    def loadData(self, havingCount = 15, LIMIT=5000, testing=False, table='', withOutTable='', through_table=False):
+    def loadData(self, havingCount = 15, LIMIT=5000, testing=False, table='', withOutTable='', through_table=False, sqlfile=''):
 
         print('Loading asin/reviewerID from cav file...')
         asin, reviewerID = self.Read_Asin_Reviewer(table)
@@ -211,6 +211,12 @@ class Preprocess:
                     'ORDER BY reviewerID,unixReviewTime ASC ;'
                 )
 
+        if(sqlfile!='' and not testing):
+            with open(sqlfile) as file_:
+                sql = file_.read().split(';')[0]
+        else:
+            with open(sqlfile) as file_:
+                sql = file_.read().split(';')[1]
         print(sql)
 
         conn = DBConnection()

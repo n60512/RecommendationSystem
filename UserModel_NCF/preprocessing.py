@@ -143,7 +143,7 @@ class Preprocess:
         return asin, reviewerID
 
     #%% Load dataset from database
-    def loadData(self, havingCount = 15, LIMIT=5000, testing=False, table='', withOutTable=''):
+    def loadData(self, havingCount = 15, LIMIT=5000, testing=False, sqlfile='', table='', withOutTable=''):
 
         print('Loading asin/reviewerID from cav file...')
         asin, reviewerID = self.Read_Asin_Reviewer(table)
@@ -217,7 +217,12 @@ class Preprocess:
                 'AND {}review.`asin` = {}metadata.`asin` '.format(table, table) +
                 'ORDER BY reviewerID,unixReviewTime ASC ;'
             )
-
+        if(sqlfile!='' and not testing):
+            with open(sqlfile) as file_:
+                sql = file_.read().split(';')[0]
+        else:
+            with open(sqlfile) as file_:
+                sql = file_.read().split(';')[1]
         print(sql)
 
         conn = DBConnection()
@@ -229,12 +234,11 @@ class Preprocess:
         return res, itemObj, userObj
 
     # %%
-    def Generate_Voc_User(self, res, batch_size = 7, validation_batch_size=3, generateVoc=True):
+    def Generate_Voc_User(self, res, havingCount=6, generateVoc=True):
         
         USER = list()
         LAST_USER = ''
         ctr = -1
-        havingCount = batch_size + validation_batch_size
 
         # Creating Voc
         st = time.time()

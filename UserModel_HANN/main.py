@@ -231,7 +231,20 @@ def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, valida
                     else:
                         interInput = torch.cat((interInput, outputs) , 0) 
                         interInput_asin = torch.cat((interInput_asin, this_asins) , 0) 
-            
+
+                # attn
+                writeAttn = not  True
+                if(writeAttn):
+                    for index_ , user_ in enumerate(current_reviewerIDs):
+
+                        tmpIntra = intra_attn_score[:,index_].squeeze(1).tolist()
+                        tmp_input_variable  = input_variable[:,index_].tolist()
+
+                        with open('Visualize/attn_interaction@15_review@8_general/num@{}review_attn.txt'.format(reviews_ctr), 'a') as file:
+                            file.write("=================================\nuser: {}\n".format(user_))
+                            for x, y in zip(tmpIntra, tmp_input_variable):
+                                file.write('{} ,{} ,{}\n'.format(x, y, voc.index2word[y]))                    
+
             if(RSNR):
                 interInput = randomSelectNoneReview(interInput, InterGRU.itemEmbedding(interInput_asin), type_='z',randomSetup=randomSetup)
 
@@ -239,6 +252,20 @@ def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, valida
                 outputs, intra_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
                 outputs = outputs.squeeze(1)
             
+
+            # attn
+            if(not writeAttn):
+                for index_ , user_ in enumerate(current_reviewerIDs):
+
+                    tmpInter = inter_attn_score.squeeze(2)[:,index_].tolist()
+
+                    with open('Visualize/attn_interaction@15_review@8_general/inter.txt', 'a') as file:
+                        file.write("=================================\nuser: {}\n".format(user_))
+                        for index__, val in enumerate(tmpInter):
+                            file.write('{} ,{}\n'.format(index__, val))    
+
+
+
             current_labels = torch.tensor(validate_batch_labels[idx][batch_ctr]).to(device)
 
             err = (outputs*(5-1)+1) - current_labels
@@ -271,7 +298,7 @@ if __name__ == "__main__":
     
     USE_CUDA = torch.cuda.is_available()
     device = torch.device("cuda" if USE_CUDA else "cpu")
-    directory = '1219_clothing_pre_cat_r4_bs40_lr5e05_lk32_dec20_dp0_interGeneral'
+    directory = '0108_clothing_pre_cat_r8_bs40_lr5e05_lk32_dec20_sqlfile_interGeneral'
 
     # %%
     """
@@ -280,16 +307,16 @@ if __name__ == "__main__":
     pre_work = Preprocess()
 
     # Parameters Setup
-    trainOption =not True
-    validationOption =not True
-    testOption = not True
+    trainOption =  True
+    validationOption = True
+    testOption =  True
 
     StoreWordSemanticOption = not True
 
     intra_method = 'dualFC'
     inter_method = 'general'
 
-    trainingEpoch = 30
+    trainingEpoch = 20
     num_of_reviews = 4
     batch_size = 40
     num_of_rating = 3
@@ -305,7 +332,7 @@ if __name__ == "__main__":
     Test_RSNR =not True
     randomSetup = 3
     
-    testRealtime =not False
+    testRealtime =False
     # For real-time testing
     if(testRealtime):
         through_table = True
@@ -316,7 +343,7 @@ if __name__ == "__main__":
         pass
 
     selectTable = 'clothing_'
-    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=2000, testing=False, table='clothing_')  # for clothing.
+    res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=2000, testing=False, table='clothing_', sqlfile='HNAE/SQL/cloth_interaction@15.sql')  # for clothing.
 
     # Generate voc & User information
     voc, USER = pre_work.Generate_Voc_User(res, havingCount=15, limit_user=1000)
@@ -371,7 +398,7 @@ if __name__ == "__main__":
     if(testOption):
         # Loading testing data from database
         # res, itemObj, userObj = pre_work.loadData(havingCount=20, LIMIT=500, testing=True, table='elec_')   # elec
-        res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000', through_table=through_table)   # clothing
+        res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=200, testing=True, table='clothing_', withOutTable='clothing_training_1000', through_table=through_table, sqlfile='HNAE/SQL/cloth_interaction@15.sql')   # clothing
         # res, itemObj, userObj = pre_work.loadData(havingCount=15, LIMIT=400, testing=True, table='toys_', withOutTable='toys_training_1000')   # toys
         USER = pre_work.Generate_Voc_User(res, havingCount=15, generateVoc=False, user_based=user_based)
 
