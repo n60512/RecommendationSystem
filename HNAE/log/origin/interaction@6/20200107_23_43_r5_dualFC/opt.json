@@ -1,0 +1,17 @@
+{
+    "mode": "both",
+    "save_dir": "HNAE/log/origin/20200107_23_43",
+    "sqlfile": "HNAE/SQL/cloth_interaction@6.sql",
+    "save_model_freq": 1,
+    "having_interactions": 6,
+    "epoch": 20,
+    "num_of_reviews": 5,
+    "batchsize": 40,
+    "num_of_rating": 1,
+    "num_of_validate": 3,
+    "latentK": 32,
+    "lr": 0.00001,
+    "selectTable": "clothing_",
+    "intra_attn_method": "dualFC",
+    "inter_attn_method": "dualFC"
+}
