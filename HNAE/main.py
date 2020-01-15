@@ -306,7 +306,7 @@ if __name__ == "__main__":
     pre_work = Preprocess(use_nltk_stopword=opt.use_nltk_stopword)
     print(opt.use_nltk_stopword)
 
-    res, itemObj, userObj = pre_work.loadData( sqlfile=opt.sqlfile, testing=False, table= opt.selectTable)  # for clothing.
+    res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=False, table= opt.selectTable)  # for clothing.
 
     # Generate voc & User information
     voc, USER = pre_work.Generate_Voc_User(res, having_interaction=opt.having_interactions)
