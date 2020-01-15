@@ -43,9 +43,46 @@ def clothing_bs_compare_():
     dir[modelName[0]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr1e05_lk32_dec20_dualFC_RSNRv/TestingLoss_0.txt'
     dir[modelName[1]] = R'ReviewsPrediction_Model/Loss/1217_clothing_nopre_cat_r4_bs40_lr5e05_lk32_dec20_intergeneral_RSNRv/TestingLoss_0.txt'
     
+    return dir, modelName
+
+def clothing_Jan_interaction6_compare_():
+    dir = dict()
+    modelName = ['NCF', 'HANN', 'interGeneral', 'without' ]
+
+    dir[modelName[0]] = R'ReviewsPrediction_Model/NCF/Loss/0105_clothing_ncf_it6_lr1e05/TestingLoss.txt'    
+    dir[modelName[1]] = R'HNAE/log/origin/interaction@6/20200107_23_43_r5_dualFC/Loss/TestingLoss.txt'    
+    dir[modelName[2]] = R'HNAE/log/origin/interaction@6/20200108_00_18_r5_general/Loss/TestingLoss.txt'
+    dir[modelName[3]] = R'HNAE/log/origin/interaction@6/20200109_09_20_r5_without/Loss/TestingLoss.txt'    
+    
+    
+    return dir, modelName
+
+def clothing_Jan_interaction6_interaction15_compare_():
+    dir = dict()
+    modelName = ['NCF', 'HANN', 'it@15_R@4' ]
+
+    dir[modelName[0]] = R'ReviewsPrediction_Model/NCF/Loss/0105_clothing_ncf_it6_lr1e05/TestingLoss.txt'    
+    dir[modelName[1]] = R'HNAE/log/origin/interaction@6/20200107_23_43_r5_dualFC/Loss/TestingLoss.txt'    
+    dir[modelName[2]] = R'HNAE/log/origin/20200109_10_47_interaction@15_review@4/Loss/TestingLoss.txt'
+    
+    
+    
+    return dir, modelName
+
+def clothing_Jan_interaction15_wv_pretrian():
+    dir = dict()
+    modelName = ['NCF', 'it@15_R@4', 'it@15_R@4_with_fasttext' ]
+
+    dir[modelName[0]] = R'ReviewsPrediction_Model/NCF/Loss/0105_clothing_ncf_it6_lr1e05/TestingLoss.txt'    
+    dir[modelName[1]] = R'HNAE/log/origin/20200109_10_47_interaction@15_review@4/Loss/TestingLoss.txt'    
+    dir[modelName[2]] = R'HNAE/log/origin/20200109_10_54_interaction@15_review@4_PretrainWV/Loss/TestingLoss.txt'
     
 
+    
+    
+    
     return dir, modelName
+
 
 def clothing_reviews_compare():
     dir = dict()
@@ -71,7 +108,7 @@ def drawLoss(dir):
         
         modelList[mName] = _errlist
 
-        if(len(modelList[mName])==25):
+        if(len(modelList[mName])==10):
             model_loss[mName] = [index*2 for index in range(len(modelList[mName]))]
         else:
             model_loss[mName] = [index for index in range(len(modelList[mName]))]
@@ -106,11 +143,11 @@ def drawBest(dir):
     plt.legend(loc='best', framealpha=0.5, prop={'size': 'large', 'family': 'monospace'})
 
 
-saveName = '1225_clothing_realtime_compare_2'
+saveName = '200108_clothing_compare_pretrain_wv'
 fig = plt.figure(figsize=(12, 8), dpi=288)
 
 # dir, modelName = clothing_compare()
-dir, modelName = clothing_bs_compare()
+dir, modelName = clothing_Jan_interaction15_wv_pretrian()
 # drawBest(dir)
 
 drawLoss(dir)
