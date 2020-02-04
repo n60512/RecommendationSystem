@@ -79,11 +79,13 @@ class Voc:
     pass
 
 class Preprocess:
-    def __init__(self, use_nltk_stopword = 'N'):
+    def __init__(self, setence_max_len, use_nltk_stopword = 'N'):
         if(use_nltk_stopword == 'Y'):
             self.use_nltk_stopword = True
         elif(use_nltk_stopword == 'N'):
             self.use_nltk_stopword = False
+
+        self.setence_max_len = setence_max_len
 
     # convert all letters to lowercase 
     def unicodeToAscii(self, s):
@@ -135,9 +137,9 @@ class Preprocess:
     # Returns padded input sequence tensor and lengths
     def inputVar(self, l, voc, testing=False):
         if(testing):
-            indexes_batch = [self.indexesFromSentence_Evaluate(voc, sentence) for sentence in l]
+            indexes_batch = [self.indexesFromSentence_Evaluate(voc, sentence, MAX_LENGTH=self.setence_max_len) for sentence in l]
         else:   # for training
-            indexes_batch = [self.indexesFromSentence(voc, sentence) for sentence in l]
+            indexes_batch = [self.indexesFromSentence(voc, sentence, MAX_LENGTH=self.setence_max_len) for sentence in l]
 
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
         padList = self.zeroPadding(indexes_batch)
@@ -159,7 +161,7 @@ class Preprocess:
         return asin, reviewerID
 
     # Load dataset from database
-    def loadData(self, sqlfile='', testing=False, table=''):
+    def loadData(self, sqlfile='', testing=False, table='', rand_seed=42):
 
         print('\nLoading asin/reviewerID from cav file...')
         asin, reviewerID = self.Read_Asin_Reviewer(table)
@@ -182,6 +184,8 @@ class Preprocess:
             with open(sqlfile) as file_:
                 sql = file_.read().split(';')[1]
 
+        # Setup random seed
+        sql = sql.replace("RAND()", "RAND({})".format(rand_seed))
         print("\nSql cmd:\n{}".format(sql))
 
         conn = DBConnection()

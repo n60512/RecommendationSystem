@@ -123,6 +123,8 @@ class HANN(nn.Module):
 
         self.inter_review = nn.GRU(GRU_InputSize, hidden_size, n_layers,
                           dropout=(0 if n_layers == 1 else dropout))
+                          
+        self.dropout = nn.Dropout(dropout)
         
         self.fc_doubleK = nn.Linear(hidden_size*2 , self.latentK*2)
         # self.fc_doubleK = nn.Linear(hidden_size + latentK , self.latentK*2)
@@ -174,7 +176,10 @@ class HANN(nn.Module):
 
         # Consider attention score
         weighting_outputs = inter_attn_score * outputs
-        outputs_sum = torch.sum(weighting_outputs , dim = 0)    
+        outputs_sum = torch.sum(weighting_outputs , dim = 0)  
+
+        # dropout
+        # outputs_sum = self.dropout(outputs_sum)
 
         # Concat. interaction vector & GRU output
         outputs_cat = torch.cat((outputs_sum, elm_w_product_inter), dim=1)
@@ -185,6 +190,9 @@ class HANN(nn.Module):
         outputs_ = self.fc_singleK(outputs_)  
         # K to 1 dimension
         outputs_ = self.fc_out(outputs_)
+
+        # dropout
+        outputs_ = self.dropout(outputs_)
 
         sigmoid_outputs = torch.sigmoid(outputs_)
         sigmoid_outputs = sigmoid_outputs.squeeze(0)

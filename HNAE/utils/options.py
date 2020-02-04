@@ -16,9 +16,11 @@ class GatherOptions():
         # parser.add_argument("--model_dir", help="path to load model for test(the largest step or use --step to specify)")
         
         parser.add_argument('--sqlfile', default='', help="loacl sql cmd file")
+        parser.add_argument("--train_test_rand_seed", type=int, default=42, help="rand seed for data seleting")        
 
         parser.add_argument('--save_model_freq', type=int, default=1, help="frequency of saving model")
-
+        
+        parser.add_argument("--setence_max_len", type=int, default=100, help="Max length of sentence")        
         parser.add_argument("--having_interactions", type=int, default=15, help="num of user interactions")        
         parser.add_argument("--epoch", type=int, default=30, help="num of eopch for training")        
         parser.add_argument('--num_of_reviews', type=int, default=4, help="number of every user's reviews")
@@ -27,7 +29,9 @@ class GatherOptions():
         parser.add_argument("--num_of_validate", type=int, default=3, help="number of validate")
         parser.add_argument("--latentK", type=int, default=32, help="latenK")
         parser.add_argument('--lr', type=float, default=0.00005, help="initial learning rate for adam")
-        # parser.add_argument('--dropout', type=float, default=0, help="dropout")        
+        parser.add_argument('--dropout', type=float, default=0, help="dropout")
+        parser.add_argument('--clip', type=float, default=50.0, help="clip")
+
 
         parser.add_argument('--selectTable', default='clothing_', help="select db table")
 
@@ -60,6 +64,7 @@ class GatherOptions():
             os.makedirs(opt.save_dir, exist_ok=True)
             os.makedirs(opt.save_dir + "/Loss", exist_ok=True)
             os.makedirs(opt.save_dir + "/Model", exist_ok=True)
+            os.makedirs(opt.save_dir + "/checkpts", exist_ok=True)
 
             with open(self.config_path, 'w') as f:
                 json.dump(self.opt.__dict__, f)

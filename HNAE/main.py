@@ -20,7 +20,7 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 opt = options.GatherOptions().parse()
 
 if(opt.user_pretrain_wordVec == 'Y'):
-    filename = 'HNAE/data/clothing_festtext_subEmb.voc'
+    filename = 'HNAE/data/clothing_festtext_subEmb.vec'
     pretrain_words = KeyedVectors.load_word2vec_format(filename, binary=False)
 
 class UserAttnRecord():
@@ -122,6 +122,11 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
             # Perform backpropatation
             loss.backward()
 
+            # Clip gradients: gradients are modified in place
+            for reviews_ctr in range(len(training_batches)):            
+                _ = nn.utils.clip_grad_norm_(IntraGRU[reviews_ctr].parameters(), opt.clip)
+            _ = nn.utils.clip_grad_norm_(InterGRU.parameters(), opt.clip)
+
             # Adjust model weights
             for reviews_ctr in range(len(training_batches)):
                 IntraGRU_optimizer[reviews_ctr].step()
@@ -133,7 +138,7 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, t
 
 def Train(myVoc, table, training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, 
      directory, TrainEpoch=100, latentK=32, intra_method ='dualFC', inter_method='dualFC',
-     learning_rate = 0.00001, dropout=0, isStoreModel=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, 
+     learning_rate = 0.00001, dropout=0, isStoreModel=False, isStoreCheckPts=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, 
      isCatItemVec= True, RSNR=False, randomSetup=-1, pretrain_wordVec=None):
 
     hidden_size = 300
@@ -169,7 +174,7 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
         IntraGRU[idx].train()
 
         # Initialize optimizers
-        IntraGRU_optimizer.append(optim.Adam(IntraGRU[idx].parameters(), 
+        IntraGRU_optimizer.append(optim.AdamW(IntraGRU[idx].parameters(), 
                 lr=learning_rate, weight_decay=0.001)
             )
         
@@ -186,12 +191,12 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
     InterGRU = InterGRU.to(device)
     InterGRU.train()
     # Initialize IntraGRU optimizers    
-    InterGRU_optimizer = optim.Adam(InterGRU.parameters(), 
+    InterGRU_optimizer = optim.AdamW(InterGRU.parameters(), 
             lr=learning_rate, weight_decay=0.001)
 
     # Assuming optimizer has two groups.
     inter_scheduler = optim.lr_scheduler.StepLR(InterGRU_optimizer, 
-        step_size=20, gamma=0.3)
+        step_size=10, gamma=0.3)
 
 
     print('Models built and ready to go!')
@@ -216,7 +221,34 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
                     
         if WriteTrainLoss:
             with open(R'{}/Loss/TrainingLoss.txt'.format(opt.save_dir),'a') as file:
-                file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))        
+                file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))  
+
+        # Save checkpoint
+        if (Epoch % store_every == 0 and isStoreCheckPts):
+            # Store intra-GRU model
+            for idx__, IntraGRU__ in enumerate(IntraGRU):
+                state = {
+                    'epoch': Epoch,
+                    'num_of_review': idx__,
+                    'intra{}'.format(idx__): IntraGRU__.state_dict(),
+                    'intra{}_opt'.format(idx__): IntraGRU_optimizer[idx__].state_dict(),
+                    'train_loss': current_loss_average,
+                    'voc_dict': myVoc.__dict__,
+                    'embedding': embedding.state_dict()
+                }
+                torch.save(state, R'{}/checkpts/IntraGRU_idx{}_epoch{}'.format(opt.save_dir, idx__, Epoch))
+            
+            # Store inter-GRU model
+            state = {
+                'epoch': Epoch,
+                'inter': InterGRU.state_dict(),
+                'inter_opt': InterGRU_optimizer.state_dict(),
+                'train_loss': current_loss_average,
+                'voc_dict': myVoc.__dict__,
+                'embedding': embedding.state_dict()
+            }
+            torch.save(state, R'{}/checkpts/InterGRU_epoch{}'.format(opt.save_dir, Epoch))
+
 
 def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, 
     isCatItemVec=False, RSNR=False, randomSetup=-1, isWriteAttn=False, userObj=None):
@@ -292,21 +324,29 @@ def evaluate(IntraGRU, InterGRU, training_batches, training_asin_batches, valida
             err = (outputs*(5-1)+1) - current_labels
             loss = torch.mul(err, err)
             loss = torch.mean(loss, dim=0)
-            
+
+
+            loss = torch.sqrt(loss)
+
             group_loss += loss
 
     num_of_iter = len(training_batches[0])*len(validate_batch_labels)
-    RMSE = torch.sqrt(group_loss/num_of_iter)
+    RMSE = group_loss/num_of_iter
+
+    #         group_loss += loss
+
+    # num_of_iter = len(training_batches[0])*len(validate_batch_labels)
+    # RMSE = torch.sqrt(group_loss/num_of_iter)
     return RMSE
 
 
 if __name__ == "__main__":
 
 
-    pre_work = Preprocess(use_nltk_stopword=opt.use_nltk_stopword)
+    pre_work = Preprocess(opt.setence_max_len, use_nltk_stopword=opt.use_nltk_stopword)
     print(opt.use_nltk_stopword)
 
-    res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=False, table= opt.selectTable)  # for clothing.
+    res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=False, table= opt.selectTable, rand_seed=opt.train_test_rand_seed)  # for clothing.
 
     # Generate voc & User information
     voc, USER = pre_work.Generate_Voc_User(res, having_interaction=opt.having_interactions)
@@ -357,14 +397,14 @@ if __name__ == "__main__":
 
         Train(voc, opt.selectTable, training_batches, training_asin_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, 
             opt.save_dir, TrainEpoch=opt.epoch, latentK=opt.latentK, intra_method=opt.intra_attn_method , inter_method=opt.inter_attn_method,
-            learning_rate = opt.lr, dropout=0, isStoreModel=True, WriteTrainLoss=True, store_every = opt.save_model_freq, 
+            learning_rate = opt.lr, dropout=opt.dropout, isStoreModel=True, WriteTrainLoss=True, store_every = opt.save_model_freq, 
             use_pretrain_item=False, isCatItemVec=True, RSNR=False, pretrain_wordVec=pretrain_wordVec)
 
     # Generate testing batches
     if(opt.mode == "test" or opt.mode == "showAttn" or opt.mode == "both"):
 
         # Loading testing data from database
-        res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=True, table=opt.selectTable)   # clothing
+        res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=True, table=opt.selectTable, rand_seed=opt.train_test_rand_seed)   # clothing
         USER = pre_work.Generate_Voc_User(res, having_interaction=opt.having_interactions, generateVoc=False)
 
         # Generate testing labels
@@ -409,8 +449,6 @@ if __name__ == "__main__":
 
             with open(R'{}/Loss/TestingLoss.txt'.format(opt.save_dir),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
-
-    stop = 1
 
     # Testing (with showing attention weight)
     if(opt.mode == "showAttn"):

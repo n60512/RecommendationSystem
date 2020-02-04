@@ -14,7 +14,7 @@ class Visualization(object):
     def wdIndex2sentences(self, word_index, idx2wd, weights):
         
         words = [idx2wd[index] for index in word_index if idx2wd[index] != 'PAD']
-        weights = [weights[index] for index in range(len(word_index)) if idx2wd[index] != 'PAD']
+        weights = [weights[index] for index, idx in enumerate(word_index) if idx2wd[idx] != 'PAD']
         sentence = [" ".join(words)]
         return sentence, [weights]
 

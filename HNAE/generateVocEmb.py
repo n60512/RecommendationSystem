@@ -65,12 +65,12 @@ def StoreWordSemantic(words, dim, fname):
         
 # %%
 
-StoreWordSemantic(words, 300, "HNAE/data/clothing_festtext_subEmb.voc")
+StoreWordSemantic(words, 300, "HNAE/data/clothing_festtext_subEmb.vec")
 
 # %%
 from gensim.models import KeyedVectors
 
-filename = 'HNAE/data/clothing_festtext_subEmb.voc'
+filename = 'HNAE/data/clothing_festtext_subEmb.vec'
 model_test = KeyedVectors.load_word2vec_format(filename, binary=False)
 
 model_test.most_similar('great', topn=5)
