@@ -9,3 +9,12 @@ DBconnector.py
 PretrainingEmb/*
 ReviewsPrediction_Model/NCF/model/*
 ReviewsPrediction_Model/RealTime/model/*
+HNAE/log/origin/*/Model/*
+HNAE/log/origin/*/*/Model/*
+HNAE/log/origin/*/VisualizeAttn/htmlhm/*
+HNAE/log/origin/*/*/VisualizeAttn/htmlhm/*
+PretrainWord/wiki-news-300d-1M.vec
+PretrainWord/wiki-news-300d-1M.vec.zip
+*.pyc
+*.vec
+HNAGE/log/origin/*/Model/*
