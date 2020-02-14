@@ -29,6 +29,24 @@ class PersonalHistory:
         pass
     pass
 
+class MarketHistory:
+    def __init__(self, asin):
+        self.asin = asin
+        self.sentences = list()
+        self.rating = list()
+        self.this_asin = list()
+        self.this_reviewerID = list()
+        self.RowCount = 0
+
+    def addData(self, sentence_, rating_, this_asin_, reviewerID_):
+        self.sentences.append(sentence_)
+        self.rating.append(rating_)
+        self.this_asin.append(this_asin_)
+        self.this_reviewerID.append(reviewerID_)
+        self.RowCount += 1
+        pass
+    pass
+
 class item:
     def __init__(self):
         self.asin2index = {}
@@ -55,18 +73,14 @@ class user:
             self.num_reviewerIDs += 1   
     pass
 
-# Default word tokens
 PAD_token = 0  # Used for padding short sentences
-SOS_token = 1  # Start-of-sentence token
-EOS_token = 2  # End-of-sentence token
-
 class Voc:
     def __init__(self, name):
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {PAD_token: "PAD", SOS_token: "SOS", EOS_token: "EOS"}
-        self.num_words = 3  # Count SOS, EOS, PAD
+        self.index2word = {PAD_token: "PAD"}
+        self.num_words = 1
 
     def addSentence(self, sentence):
         for word in sentence.split(' '):
@@ -111,10 +125,10 @@ class Preprocess:
             # sentence_segment = sentence.split(' ')[:MAX_LENGTH]
             sentence_segment = sentence.split(' ')
             filtered_sentence = [word for word in sentence_segment if word not in stopwords.words('english')][:MAX_LENGTH]
-            return [voc.word2index[word] for word in filtered_sentence] + [EOS_token]
+            return [voc.word2index[word] for word in filtered_sentence]
         else:
             sentence_segment = sentence.split(' ')[:MAX_LENGTH]
-            return [voc.word2index[word] for word in sentence_segment] + [EOS_token]
+            return [voc.word2index[word] for word in sentence_segment]
 
     def indexesFromSentence_Evaluate(self, voc, sentence , MAX_LENGTH = 200):
         if(self.use_nltk_stopword):
@@ -133,7 +147,7 @@ class Preprocess:
             except Exception as msg:
                 print('Exception :\n', msg)
 
-        return indexes + [EOS_token]
+        return indexes
 
     def zeroPadding(self, l, fillvalue=PAD_token):
         return list(itertools.zip_longest(*l, fillvalue=fillvalue))
@@ -165,7 +179,7 @@ class Preprocess:
         return asin, reviewerID
 
     # Load dataset from database
-    def loadData(self, sqlfile='', testing=False, test_on_traindata=False, table='', rand_seed=42):
+    def loadData(self, sqlfile='', testing=False, table='', rand_seed=42):
 
         print('\nLoading asin/reviewerID from cav file...')
         asin, reviewerID = self.Read_Asin_Reviewer(table)
@@ -185,12 +199,8 @@ class Preprocess:
             with open(sqlfile) as file_:
                 sql = file_.read().split(';')[0]
         else:
-            # testing
             with open(sqlfile) as file_:
-                if(test_on_traindata):
-                    sql = file_.read().split(';')[1].replace('NOT IN','IN')
-                else:
-                    sql = file_.read().split(';')[1]
+                sql = file_.read().split(';')[1]
 
         # Setup random seed
         sql = sql.replace("RAND()", "RAND({})".format(rand_seed))
@@ -205,54 +215,107 @@ class Preprocess:
         return res, itemObj, userObj
 
     #
-    def Generate_Voc_User(self, res, having_interaction=10, limit_user=999999, generateVoc=True, user_based=True):
+    def Generate_Voc_User(self, res, having_interaction=10, limit_reviews=999999, generateVoc=True, user_based=True
+        ,netType = 'item_base'):
         
-        USER = list()
-        LAST_USER = ''
-        ctr = -1
-        
-        # Creating Voc
+        # Calculate spending time
         st = time.time()
-        print('\nCreating Voc ...') 
-        if(generateVoc):
-            myVoc = Voc('Review')
+        print('\nCreating Voc ...')         
 
-        for index in tqdm.tqdm(range(len(res))):
-            # Original : user based
-            if(user_based):
-                # Check is the next user or not
-                if(LAST_USER != res[index]['reviewerID'] and len(USER)<limit_user):
-                    LAST_USER = res[index]['reviewerID']
-                    USER.append(PersonalHistory(res[index]['reviewerID']))
-                    ctr += 1   # add counter if change the user id
-            else:
-                # Check is the next 'Row' or not
-                if(res[index]['rank'] == 1):
-                    USER.append(PersonalHistory(res[index]['reviewerID']))
-                    ctr += 1   # add counter if change the user id                
-                pass
+        if(netType == 'user_base'):
+
+            USER = list()
+            LAST_USER = ''
+            ctr = -1
             
-            if(res[index]['rank'] < having_interaction + 1):
-                current_sentence = self.normalizeString(res[index]['reviewText'])
-                
-                if(generateVoc):
-                    myVoc.addSentence(current_sentence) # myVoc add word 
-                
-                if(len(USER)<limit_user+1):
-                    USER[ctr].addData(
-                                current_sentence,
-                                res[index]['overall'], 
-                                res[index]['asin'],
-                                res[index]['reviewerID']
-                            )
+            # Creating Voc
+            if(generateVoc):
+                myVoc = Voc('Review')
 
-        print('User length:[{}]'.format(len(USER)))
-        print('Voc creation complete. [{}]'.format(time.time()-st))
+            for index in tqdm.tqdm(range(len(res))):
+                # Original : user based
+                if(user_based):
+                    # Check is the `next user` or not
+                    if(LAST_USER != res[index]['reviewerID'] and len(USER)<limit_reviews):
+                        LAST_USER = res[index]['reviewerID']
+                        USER.append(PersonalHistory(res[index]['reviewerID']))
+                        ctr += 1   # add counter if change the user id
+                else:
+                    # Check is the next 'Row' or not
+                    if(res[index]['rank'] == 1):
+                        USER.append(PersonalHistory(res[index]['reviewerID']))
+                        ctr += 1   # add counter if change the user id                
+                    pass
+                
+                # Dealing with sentences
+                if(res[index]['rank'] < having_interaction + 1):
+                    current_sentence = self.normalizeString(res[index]['reviewText'])
+                    
+                    if(generateVoc):
+                        myVoc.addSentence(current_sentence) # myVoc add word 
+                    
+                    if(len(USER)<limit_reviews+1):
+                        USER[ctr].addData(
+                                    current_sentence,
+                                    res[index]['overall'], 
+                                    res[index]['asin'],
+                                    res[index]['reviewerID']
+                                )
 
-        if(generateVoc):
-            return myVoc, USER
-        else:
-            return USER
+            print('User length:[{}]'.format(len(USER)))
+            print('Voc creation complete. [{}]'.format(time.time()-st))
+
+            if(generateVoc):
+                return myVoc, USER
+            else:
+                return USER
+        
+        elif(netType == 'item_base'):
+
+            ITEM = list()
+            LAST_ITEM = ''
+            ctr = -1
+            
+            # Creating Voc
+            if(generateVoc):
+                myVoc = Voc('Review')
+
+            for index in tqdm.tqdm(range(len(res))):
+                if(user_based):
+                    # Check is the `next item` or not
+                    if(LAST_ITEM != res[index]['asin'] and len(ITEM)<limit_reviews):
+                        LAST_ITEM = res[index]['asin']
+                        ITEM.append(MarketHistory(res[index]['asin']))
+                        ctr += 1   # add counter if change the asin id
+                else:
+                    # Check is the next 'Row' or not
+                    if(res[index]['rank'] == 1):
+                        ITEM.append(MarketHistory(res[index]['asin']))
+                        ctr += 1   # add counter if change the user id                
+                    pass
+                
+                # Dealing with sentences
+                if(res[index]['rank'] < having_interaction + 1):
+                    current_sentence = self.normalizeString(res[index]['reviewText'])
+                    
+                    if(generateVoc):
+                        myVoc.addSentence(current_sentence) # myVoc add word 
+                    
+                    if(len(ITEM)<limit_reviews+1):
+                        USER[ctr].addData(
+                                    current_sentence,
+                                    res[index]['overall'], 
+                                    res[index]['asin'],
+                                    res[index]['reviewerID']
+                                )
+
+            print('User length:[{}]'.format(len(ITEM)))
+            print('Voc creation complete. [{}]'.format(time.time()-st))
+
+            if(generateVoc):
+                return myVoc, ITEM
+            else:
+                return USER
 
     def Generate_Voc(self, res):
         # Creating Voc
@@ -268,9 +331,7 @@ class Preprocess:
         return myVoc
 
     #
-    def batch2TrainData(self, myVoc, sentences, rating, isSort = False, 
-        normalizeRating = False, testing=False, useNLTK=True, isGeneration=False):
-
+    def batch2TrainData(self, myVoc, sentences, rating, isSort = False, normalizeRating = False, testing=False, useNLTK=True):
         sentences_rating_pair = list()
         for index in range(len(sentences)):
             sentences_rating_pair.append(
@@ -279,7 +340,7 @@ class Preprocess:
                 ]
             )
         
-        sentences_batch, rating_batch, sentences_batch_gt = [], [], []  # sentences_batch_gt(ground true sentences)
+        sentences_batch, rating_batch = [], []
         for pair in sentences_rating_pair:
             sentences_batch.append(pair[0])
             rating_batch.append(pair[1])
@@ -326,7 +387,7 @@ class Preprocess:
 
     
     # Create sentences & length encoding
-    def GenerateTrainingBatches(self, USER, itemObj, voc, start_of_reviews=0, num_of_reviews = 5 , batch_size = 5, testing=False):
+    def GenerateTrainingBatches(self, USER, itemObj, voc, num_of_reviews = 5 , batch_size = 5, testing=False):
         new_training_batches_sentences = list()
         new_training_batches_ratings = list()
         new_training_batches = list()
@@ -336,7 +397,7 @@ class Preprocess:
 
         # for each user numberth reivews
         
-        for review_ctr in range(start_of_reviews, num_of_reviews, 1):
+        for review_ctr in range(0, num_of_reviews, 1):
             new_training_batch_sen = dict() # 40 (0~39)
             new_training_batch_rating = dict()
             new_training_batch_asin = dict()
@@ -432,7 +493,7 @@ class Preprocess:
         return training_labels, training_asins, training_reviewerIDs
         
 
-    def GenerateBatchLabelCandidate(self, labels_, asins_, reviewerIDs_, batch_size, USER, itemObj, voc, start_of_reviews=5, num_of_reviews = 1, testing=False):
+    def GenerateBatchLabelCandidate(self, labels_, asins_, reviewerIDs_, batch_size):
         num_of_batch_group = 0
         batch_labels = dict()
         candidate_asins = dict()
@@ -453,9 +514,4 @@ class Preprocess:
             candidate_asins[num_of_batch_group].append(asins_[idx])
             candidate_reviewerIDs[num_of_batch_group].append(reviewerIDs_[idx])
 
-        
-        testing_batches, testing_asin_batches = self.GenerateTrainingBatches(USER, itemObj, voc, start_of_reviews=start_of_reviews,
-            num_of_reviews = start_of_reviews+num_of_reviews , batch_size = batch_size, testing=testing)
-        stop = 1
-
-        return batch_labels, candidate_asins, candidate_reviewerIDs, testing_batches
+        return batch_labels, candidate_asins, candidate_reviewerIDs

@@ -26,7 +26,7 @@ WITH rand_train_set AS (
 		-- SELECT * FROM clothing_interaction6_usertrain 
 		SELECT * FROM rand_train_set 
 		) 
-	LIMIT 2480
+	LIMIT 2500
 	) 
 SELECT clothing_interaction6.rank, clothing_interaction6.ID, clothing_interaction6.reviewerID, clothing_interaction6.`asin`, 
 clothing_interaction6.overall, clothing_interaction6_rm_sw.reviewText, clothing_interaction6.unixReviewTime

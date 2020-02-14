@@ -20,7 +20,7 @@ opt = options.GatherOptions().parse()
 
 # If use pre-train word vector , load .vec
 if(opt.use_pretrain_wordVec == 'Y'):
-    filename = 'HNAE/data/{}festtext_subEmb.vec'.format(opt.selectTable)
+    filename = 'HNAE_Item/data/{}festtext_subEmb.vec'.format(opt.selectTable)
     pretrain_words = KeyedVectors.load_word2vec_format(filename, binary=False)
 
 class UserAttnRecord():
@@ -347,7 +347,6 @@ if __name__ == "__main__":
     candidate_reviewerIDs = list()
 
     for idx in range(0, opt.num_of_rating, 1):
-        stop = 1
 
         training_labels, training_asins, training_reviewerIDs = pre_work.GenerateLabelEncoding(USER, 
             opt.num_of_reviews+idx, 1, itemObj, userObj)

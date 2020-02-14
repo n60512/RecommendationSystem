@@ -1,11 +1,9 @@
-
 from utils import options, visulizeOutput
 from utils.preprocessing import Preprocess
 from utils.model import IntraReviewGRU, HANN, DecoderGRU
 from visualization.attention_visualization import Visualization
 
 import datetime
-
 import tqdm
 import torch
 import torch.nn as nn
@@ -15,13 +13,16 @@ import random
 from gensim.models import KeyedVectors
 import numpy as np
 
+# Use cuda
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 opt = options.GatherOptions().parse()
 
-if(opt.user_pretrain_wordVec == 'Y'):
-    filename = 'HNAGE/data/clothing_festtext_subEmb.vec'
+# If use pre-train word vector , load .vec
+if(opt.use_pretrain_wordVec == 'Y'):
+    filename = 'HNAGE/data/{}festtext_subEmb.vec'.format(opt.selectTable)
     pretrain_words = KeyedVectors.load_word2vec_format(filename, binary=False)
+
 
 
 # Default word tokens
@@ -41,23 +42,27 @@ class UserAttnRecord():
     def addInterAttn(self, score):
         self.inter_attn_score.append(score)
 
-def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, DecoderModel, DecoderModel_optimizer, 
+def trainIteration(IntraGRU, InterGRU, DecoderModel, DecoderModel_optimizer, 
     training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, label_sen_batch,
-    isCatItemVec=False, RSNR=False, randomSetup=-1):
+    isCatItemVec=False, IntraGRU_optimizer=None, InterGRU_optimizer=None):
     
     # Initialize this epoch loss
-    epoch_loss = 0
+    hann_epoch_loss = 0
+    decoder_epoch_loss = 0
 
     for batch_ctr in tqdm.tqdm(range(len(training_batches[0]))): # amount of batches
         # Run multiple label for training 
         for idx in range(len(training_batch_labels)):
+            
+            # If turning HANN
+            if(opt.tuning_HANN == 'Y'):
+                InterGRU_optimizer.zero_grad()
+                for reviews_ctr in range(len(training_batches)): # iter. through reviews
+                    IntraGRU_optimizer[reviews_ctr].zero_grad()
 
-            InterGRU_optimizer.zero_grad()
             # Forward pass through HANN
             for reviews_ctr in range(len(training_batches)): # iter. through reviews
-
-                IntraGRU_optimizer[reviews_ctr].zero_grad()
-
+                
                 current_batch = training_batches[reviews_ctr][batch_ctr]            
                 input_variable, lengths, ratings = current_batch
                 input_variable = input_variable.to(device)
@@ -88,9 +93,24 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, D
                     if(isCatItemVec):
                         interInput_asin = torch.cat((interInput_asin, this_asins) , 0) 
             
-            outputs, intra_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
+            outputs, inter_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
             outputs = outputs.squeeze(1)
-            
+
+
+
+            # Caculate Square loss of HANN 
+            current_rating_labels = torch.tensor(training_batch_labels[idx][batch_ctr]).to(device)
+            err = (outputs*(5-1)+1) - current_rating_labels
+
+            HANN_loss = torch.mul(err, err)
+            HANN_loss = torch.mean(HANN_loss, dim=0)
+
+            # HANN loss of this epoch
+            hann_epoch_loss += HANN_loss
+
+            """
+            Runing Decoder
+            """
             # Ground true sentences
             target_batch = label_sen_batch[0][batch_ctr]
             target_variable, target_len, _ = target_batch 
@@ -99,27 +119,47 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, D
 
             # Create initial decoder input (start with SOS tokens for each sentence)
             decoder_input = torch.LongTensor([[SOS_token for _ in range(opt.batchsize)]])
-            decoder_input = decoder_input.to(device)    
+            decoder_input = decoder_input.to(device)   
 
-            # Set initial decoder hidden state to the intra_hidden's final hidden state
+
+            # Set initial decoder hidden state to the inter_hidden's final hidden state
             criterion = nn.NLLLoss()
-            loss = 0
-            decoder_hidden = intra_hidden
+            decoder_loss = 0
+            decoder_hidden = inter_hidden
 
-            for t in range(max_target_len):
-                decoder_output, decoder_hidden = DecoderModel(
-                    decoder_input, decoder_hidden
-                )
-                # No teacher forcing: next input is decoder's own current output
-                _, topi = decoder_output.topk(1)
+            # Determine if we are using teacher forcing this iteration
+            use_teacher_forcing = True if random.random() < opt.teacher_forcing_ratio else False
 
-                decoder_input = torch.LongTensor([[topi[i][0] for i in range(opt.batchsize)]])
-                decoder_input = decoder_input.to(device)
+            # Forward batch of sequences through decoder one time step at a time
+            if use_teacher_forcing:
+                for t in range(max_target_len):
+                    decoder_output, decoder_hidden = DecoderModel(
+                        decoder_input, decoder_hidden
+                    )
+                    # Teacher forcing: next input is current target
+                    decoder_input = target_variable[t].view(1, -1)  # get the row(word) of sentences
 
-                # Calculate and accumulate loss
-                nll_loss = criterion(decoder_output, target_variable[t])
-                loss += nll_loss
+                    # Calculate and accumulate loss
+                    nll_loss = criterion(decoder_output, target_variable[t])
+                    decoder_loss += nll_loss
+            else:
+                for t in range(max_target_len):
+                    decoder_output, decoder_hidden = DecoderModel(
+                        decoder_input, decoder_hidden
+                    )
+                    # No teacher forcing: next input is decoder's own current output
+                    _, topi = decoder_output.topk(1)
+
+                    decoder_input = torch.LongTensor([[topi[i][0] for i in range(opt.batchsize)]])
+                    decoder_input = decoder_input.to(device)
+
+                    # Calculate and accumulate loss
+                    nll_loss = criterion(decoder_output, target_variable[t])
+                    decoder_loss += nll_loss
             
+
+            loss = HANN_loss + decoder_loss
+
             # Perform backpropatation
             loss.backward()
 
@@ -128,23 +168,29 @@ def trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, D
                 _ = nn.utils.clip_grad_norm_(IntraGRU[reviews_ctr].parameters(), opt.clip)
             _ = nn.utils.clip_grad_norm_(InterGRU.parameters(), opt.clip)
 
-            # Adjust model weights
-            for reviews_ctr in range(len(training_batches)):
-                IntraGRU_optimizer[reviews_ctr].step()
-            InterGRU_optimizer.step()
+
+            # If turning HANN
+            if(opt.tuning_HANN == 'Y'):
+                # Adjust `HANN` model weights
+                for reviews_ctr in range(len(training_batches)):
+                    IntraGRU_optimizer[reviews_ctr].step()
+                InterGRU_optimizer.step()
+
+            # Adjust Decoder model weights
             DecoderModel_optimizer.step()
 
-            epoch_loss += loss.item()/float(max_target_len)
+            # decoder loss of this epoch
+            decoder_epoch_loss += decoder_loss.item()/float(max_target_len)
 
     stop = 1
-    return epoch_loss
+    return hann_epoch_loss, decoder_epoch_loss
 
 def Train(myVoc, table, training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, label_sen_batch, 
-     directory, TrainEpoch=100, latentK=32, intra_method ='dualFC', inter_method='dualFC',
+     directory, TrainEpoch=100, latentK=32, hidden_size = 300, intra_method ='dualFC', inter_method='dualFC',
      learning_rate = 0.00001, dropout=0, isStoreModel=False, isStoreCheckPts=False, WriteTrainLoss=False, store_every = 2, use_pretrain_item= False, 
-     isCatItemVec= True, RSNR=False, randomSetup=-1, pretrain_wordVec=None):
+     isCatItemVec= True, pretrain_wordVec=None):
 
-    hidden_size = 300
+    
     # Get asin and reviewerID from file
     asin, reviewerID = pre_work.Read_Asin_Reviewer(table)
 
@@ -161,45 +207,77 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
         asin_embedding = nn.Embedding(len(asin), hidden_size)
     reviewerID_embedding = nn.Embedding(len(reviewerID), hidden_size)    
     
-    # Initialize IntraGRU models and optimizers
+
+    # Initialize IntraGRU models
     IntraGRU = list()
-    IntraGRU_optimizer = list()
+
+    # IF USING PRETRAIN HANN
+    if(opt.use_pretrain_HANN == 'Y'):
+        inter_model_path = 'HNAGE/data/pretrain_hann/InterGRU_epoch24'
+
+        for idx in range(opt.num_of_reviews):
+            intra_model_path = 'HNAGE/data/pretrain_hann/IntraGRU_idx{}_epoch24'.format(idx)
+            model = torch.load(intra_model_path)
+            IntraGRU.append(model)
+
+        # Loading InterGRU
+        InterGRU = torch.load(inter_model_path)
+
+        # Use appropriate device
+        InterGRU = InterGRU.to(device)
+        for idx in range(opt.num_of_reviews):    
+            IntraGRU[idx] = IntraGRU[idx].to(device)
+        
+    else:
+        # Append GRU model asc
+        for idx in range(opt.num_of_reviews):    
+            IntraGRU.append(IntraReviewGRU(hidden_size, embedding, asin_embedding, reviewerID_embedding,  
+                latentK = latentK, method=intra_method))
+            # Use appropriate device
+            IntraGRU[idx] = IntraGRU[idx].to(device)
+            IntraGRU[idx].train()
+        
+        # Initialize InterGRU models
+        InterGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding,
+                n_layers=1, dropout=dropout, latentK = latentK, isCatItemVec=isCatItemVec , method=inter_method)
+
+        # Use appropriate device
+        InterGRU = InterGRU.to(device)
+        InterGRU.train()
+
 
     # Initialize IntraGRU optimizers groups
     intra_scheduler = list()
 
-    # Append GRU model asc
-    for idx in range(opt.num_of_reviews):    
-        IntraGRU.append(IntraReviewGRU(hidden_size, embedding, asin_embedding, reviewerID_embedding,  
-            latentK = latentK, method=intra_method))
-        # Use appropriate device
-        IntraGRU[idx] = IntraGRU[idx].to(device)
-        IntraGRU[idx].train()
 
-        # Initialize optimizers
-        IntraGRU_optimizer.append(optim.AdamW(IntraGRU[idx].parameters(), 
-                lr=learning_rate, weight_decay=0.001)
-            )
+    # IF tuning HANN
+    if(opt.tuning_HANN == 'Y'):
         
+
+        # Initialize `INTRA` model optimizers
+        IntraGRU_optimizer = list()
+
+        for idx in range(opt.num_of_reviews):    
+            # Initialize optimizers
+            IntraGRU_optimizer.append(optim.AdamW(IntraGRU[idx].parameters(), 
+                    lr=learning_rate, weight_decay=0.001)
+                )
+            # Assuming optimizer has two groups.
+            intra_scheduler.append(optim.lr_scheduler.StepLR(IntraGRU_optimizer[idx], 
+                step_size=20, gamma=0.3))
+
+
+        # Initialize `INTER` model optimizers    
+        InterGRU_optimizer = optim.AdamW(InterGRU.parameters(), 
+                lr=learning_rate, weight_decay=0.001)
         # Assuming optimizer has two groups.
-        intra_scheduler.append(optim.lr_scheduler.StepLR(IntraGRU_optimizer[idx], 
-            step_size=20, gamma=0.3))
-
+        inter_scheduler = optim.lr_scheduler.StepLR(InterGRU_optimizer, 
+            step_size=10, gamma=0.3)                
     
-    # Initialize InterGRU models
-    InterGRU = HANN(hidden_size, embedding, asin_embedding, reviewerID_embedding,
-            n_layers=1, dropout=dropout, latentK = latentK, isCatItemVec=isCatItemVec , method=inter_method)
+    else:
+        IntraGRU_optimizer = None
+        InterGRU_optimizer = None
 
-    # Use appropriate device
-    InterGRU = InterGRU.to(device)
-    InterGRU.train()
-    # Initialize IntraGRU optimizers    
-    InterGRU_optimizer = optim.AdamW(InterGRU.parameters(), 
-            lr=learning_rate, weight_decay=0.001)
-
-    # Assuming optimizer has two groups.
-    inter_scheduler = optim.lr_scheduler.StepLR(InterGRU_optimizer, 
-        step_size=10, gamma=0.3)
 
     # Initialize DecoderGRU models and optimizers
     DecoderModel = DecoderGRU(embedding, hidden_size, myVoc.num_words, n_layers=1, dropout=dropout)
@@ -208,23 +286,29 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
     DecoderModel.train()
     # Initialize DecoderGRU optimizers    
     DecoderModel_optimizer = optim.AdamW(DecoderModel.parameters(), 
-            lr=learning_rate * opt.decoder_learning_ratio, weight_decay=0.001)    
+            lr=learning_rate * opt.decoder_learning_ratio, 
+            weight_decay=0.001)    
 
     print('Models built and ready to go!')
 
     for Epoch in range(TrainEpoch):
         # Run a training iteration with batch
-        group_loss = trainIteration(IntraGRU, InterGRU, IntraGRU_optimizer, InterGRU_optimizer, DecoderModel, DecoderModel_optimizer, 
+        hann_group_loss, decoder_group_loss = trainIteration(IntraGRU, InterGRU, DecoderModel, DecoderModel_optimizer, 
             training_batches, training_item_batches, candidate_items, candidate_users, training_batch_labels, label_sen_batch, 
-            isCatItemVec=isCatItemVec, RSNR=RSNR, randomSetup=randomSetup)
+            isCatItemVec=isCatItemVec, IntraGRU_optimizer=IntraGRU_optimizer, InterGRU_optimizer=InterGRU_optimizer)
 
-        inter_scheduler.step()
-        for idx in range(opt.num_of_reviews):
-            intra_scheduler[idx].step()
+        # IF tuning HANN
+        if(opt.tuning_HANN == 'Y'):
+            inter_scheduler.step()
+            for idx in range(opt.num_of_reviews):
+                intra_scheduler[idx].step()
 
         num_of_iter = len(training_batches[0])*len(training_batch_labels)
-        current_loss_average = group_loss/num_of_iter
-        print('Epoch:{}\tSE:{}\t'.format(Epoch, current_loss_average))
+        
+        hann_loss_average = hann_group_loss/num_of_iter
+        decoder_loss_average = decoder_group_loss/num_of_iter
+
+        print('Epoch:{}\tHANN(SE):{}\tNNL:{}\t'.format(Epoch, hann_loss_average, decoder_loss_average))
 
         if(Epoch % store_every == 0 and isStoreModel):
             torch.save(InterGRU, R'{}/Model/InterGRU_epoch{}'.format(opt.save_dir, Epoch))
@@ -234,7 +318,7 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
                     
         if WriteTrainLoss:
             with open(R'{}/Loss/TrainingLoss.txt'.format(opt.save_dir),'a') as file:
-                file.write('Epoch:{}\tSE:{}\n'.format(Epoch, current_loss_average))  
+                file.write('Epoch:{}\tHANN(SE):{}\tNNL:{}\n'.format(Epoch, hann_loss_average, decoder_loss_average))
 
         # Save checkpoint
         if (Epoch % store_every == 0 and isStoreCheckPts):
@@ -264,9 +348,8 @@ def Train(myVoc, table, training_batches, training_item_batches, candidate_items
 
 
 def evaluate(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, testing_sen_batches,
-    isCatItemVec=False, RSNR=False, randomSetup=-1, isWriteAttn=False, userObj=None, voc=None):
+    isCatItemVec=False, isWriteAttn=False, userObj=None, itemObj=None, voc=None):
     
-    group_loss = 0
     AttnVisualize = Visualization(opt.save_dir, opt.num_of_reviews)
 
     tokens_dict = dict()
@@ -316,8 +399,14 @@ def evaluate(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_b
                             )
                             
             with torch.no_grad():
-                outputs, intra_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
+                outputs, inter_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
                 outputs = outputs.squeeze(1)
+
+            
+            # Caculate Square loss of HANN 
+            current_rating_labels = torch.tensor(validate_batch_labels[idx][batch_ctr]).to(device)
+            predict_rating = (outputs*(5-1)+1)
+            err = predict_rating - current_rating_labels
 
             # Writing Inter-attention weight to .txt file
             if(isWriteAttn):
@@ -330,15 +419,18 @@ def evaluate(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_b
                             file.write('{} ,{}\n'.format(index__, val))           
             
 
+            """
+            Greedy Search Strategy Decoder
+            """
 
             # Create initial decoder input (start with SOS tokens for each sentence)
             decoder_input = torch.LongTensor([[SOS_token for _ in range(opt.batchsize)]])
             decoder_input = decoder_input.to(device)    
 
-            # Set initial decoder hidden state to the intra_hidden's final hidden state
+            # Set initial decoder hidden state to the inter_hidden's final hidden state
             criterion = nn.NLLLoss()
             loss = 0
-            decoder_hidden = intra_hidden
+            decoder_hidden = inter_hidden
 
             # Ground true sentences
             target_batch = testing_sen_batches[0][batch_ctr]
@@ -351,7 +443,8 @@ def evaluate(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_b
             all_tokens = torch.zeros([0], device=device, dtype=torch.long)
             all_scores = torch.zeros([0], device=device)            
 
-            for t in range(opt.setence_max_len):
+            
+            for t in range(max_target_len):
                 decoder_output, decoder_hidden = DecoderModel(
                     decoder_input, decoder_hidden
                 )
@@ -371,38 +464,126 @@ def evaluate(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_b
                 # Calculate and accumulate loss
                 nll_loss = criterion(decoder_output, target_variable[t])
                 loss += nll_loss
-                stop = 1
 
 
             for index_ , user_ in enumerate(current_reviewerIDs):
+                asin_ = current_asins[index_]
+
                 current_user_tokens = all_tokens[:,index_].tolist()
                 decoded_words = [voc.index2word[token] for token in current_user_tokens if token != 0]
-                print('======================\nUserid: {}\tloss: {}\ngenerate: {}'.format(userObj.index2reviewerID[user_.item()], loss.item()/opt.setence_max_len,
+                predict_rating, current_rating_labels[index_].item()
+
+
+                generate_text = str.format('=========================\nUserid & asin:{},{}\nPredict:{:10.3f}\nRating:{:10.3f}\nGenerate: {}\n'.format(
+                    userObj.index2reviewerID[user_.item()], 
+                    itemObj.index2asin[asin_.item()],
+                    predict_rating[index_].item(),
+                    current_rating_labels[index_].item(),
                     ' '.join(decoded_words)))
 
                 current_user_sen = target_variable[:,index_].tolist()
                 origin_sen = [voc.index2word[token] for token in current_user_sen if token != 0]
-                print('origin: {}'.format(' '.join(origin_sen)))
 
-                if index_ > 20:
-                    stop =1 
+                generate_text = generate_text + str.format('Origin: {}\n'.format(' '.join(origin_sen)))
 
+                if opt.test_on_traindata == "Y":
+                    fpath = R'{}/GenerateSentences/on_train/sentences_ep{}.txt'.format(opt.save_dir, opt.epoch)
+                elif opt.test_on_traindata == "N":
+                    fpath = R'{}/GenerateSentences/on_test/sentences_ep{}.txt'.format(opt.save_dir, opt.epoch)
 
-            # tokens_dict[current_reviewerIDs] = all_tokens
-            # scores_dict[current_reviewerIDs] = all_scores
-        stop = 1
+                with open(fpath,'a') as file:
+                    file.write(generate_text)     
 
     return tokens_dict, scores_dict
 
 
+def evaluate_RMSE(IntraGRU, InterGRU, DecoderModel, training_batches, training_asin_batches, validate_batch_labels, validate_asins, validate_reviewerIDs, testing_sen_batches,
+    isCatItemVec=False, isWriteAttn=False, userObj=None, itemObj=None, voc=None):
+    
+    AttnVisualize = Visualization(opt.save_dir, opt.num_of_reviews)
+    group_loss = 0
+
+    # for batch_ctr in tqdm.tqdm(range(len(training_batches[0]))): #how many batches
+    for batch_ctr in range(len(training_batches[0])): #how many batches
+        for idx in range(len(validate_batch_labels)):
+            for reviews_ctr in range(len(training_batches)): #loop review 1 to 5
+                
+                current_batch = training_batches[reviews_ctr][batch_ctr]
+                
+                input_variable, lengths, ratings = current_batch
+                input_variable = input_variable.to(device)
+                lengths = lengths.to(device)
+
+                current_asins = torch.tensor(validate_asins[idx][batch_ctr]).to(device)
+                current_reviewerIDs = torch.tensor(validate_reviewerIDs[idx][batch_ctr]).to(device)
+        
+                # Concat. asin feature
+                this_asins = training_asin_batches[reviews_ctr][batch_ctr]
+                this_asins = torch.tensor([val for val in this_asins]).to(device)
+                this_asins = this_asins.unsqueeze(0)
+
+                with torch.no_grad():
+                    outputs, intra_hidden, intra_attn_score = IntraGRU[reviews_ctr](input_variable, lengths, 
+                        current_asins, current_reviewerIDs)
+                    outputs = outputs.unsqueeze(0)
+
+                    if(reviews_ctr == 0):
+                        interInput = outputs
+                        interInput_asin = this_asins
+                    else:
+                        interInput = torch.cat((interInput, outputs) , 0) 
+                        interInput_asin = torch.cat((interInput_asin, this_asins) , 0) 
+
+                # Writing Intra-attention weight to .html file
+                if(isWriteAttn):
+                    for index_ , user_ in enumerate(current_reviewerIDs):
+
+                        intra_attn_wts = intra_attn_score[:,index_].squeeze(1).tolist()
+                        word_indexes = input_variable[:,index_].tolist()
+                        
+                        sentence, weights = AttnVisualize.wdIndex2sentences(word_indexes, voc.index2word, intra_attn_wts)
+                        AttnVisualize.createHTML(sentence, weights, reviews_ctr, 
+                            fname='{}@{}'.format( userObj.index2reviewerID[user_.item()], reviews_ctr)
+                            )
+                            
+            with torch.no_grad():
+                outputs, inter_hidden, inter_attn_score  = InterGRU(interInput, interInput_asin, current_asins, current_reviewerIDs)
+                outputs = outputs.squeeze(1)
+
+            # Writing Inter-attention weight to .txt file
+            if(isWriteAttn):
+                for index_ , user_ in enumerate(current_reviewerIDs):
+                    inter_attn_wts = inter_attn_score.squeeze(2)[:,index_].tolist()
+                    with open('{}/VisualizeAttn/inter.txt'.format(opt.save_dir), 'a') as file:
+                        file.write("=================================\nuser: {}\n".
+                            format(userObj.index2reviewerID[user_.item()]))
+                        for index__, val in enumerate(inter_attn_wts):
+                            file.write('{} ,{}\n'.format(index__, val))           
+
+            current_labels = torch.tensor(validate_batch_labels[idx][batch_ctr]).to(device)
+
+            err = (outputs*(5-1)+1) - current_labels
+            loss = torch.mul(err, err)
+            loss = torch.mean(loss, dim=0)
+
+
+            loss = torch.sqrt(loss)
+
+            group_loss += loss
+            
+    num_of_iter = len(training_batches[0])*len(validate_batch_labels)
+    RMSE = group_loss/num_of_iter
+
+    return RMSE
+
+
 if __name__ == "__main__":
 
-
+    # Doing data preprocessing
     pre_work = Preprocess(opt.setence_max_len, use_nltk_stopword=opt.use_nltk_stopword)
-    print(opt.use_nltk_stopword)
-
+    
     res, itemObj, userObj = pre_work.loadData(sqlfile=opt.sqlfile, testing=False, table= opt.selectTable, rand_seed=opt.train_test_rand_seed)  # for clothing.
-
+    
     # Generate voc & User information
     voc, USER = pre_work.Generate_Voc_User(res, having_interaction=opt.having_interactions)
 
@@ -413,8 +594,6 @@ if __name__ == "__main__":
     label_sen_batch = None
 
     for idx in range(0, opt.num_of_rating, 1):
-        stop = 1
-
         training_labels, training_asins, training_reviewerIDs = pre_work.GenerateLabelEncoding(USER, 
             opt.num_of_reviews+idx, 1, itemObj, userObj)
         
@@ -425,45 +604,12 @@ if __name__ == "__main__":
         candidate_asins.append(_asins)
         candidate_reviewerIDs.append(_reviewerIDs)
 
+        # Batches of sentences that are LABEL.
         label_sen_batch =_label_sen_batches
 
 
-    """
-    # Check Sentences 
-    training_batches, training_asin_batches = pre_work.GenerateTrainingBatches(USER, itemObj, voc, start_of_reviews=0, num_of_reviews=opt.num_of_reviews, batch_size=opt.batchsize)
-
-
-    for batch_ctr in tqdm.tqdm(range(len(training_batches[0]))): # amount of batches
-        # Run multiple label for training 
-        for idx in range(len(training_batch_labels)):
-            # Forward pass through HANN
-            for reviews_ctr in range(len(training_batches)): # iter. through reviews
-
-                current_batch = training_batches[reviews_ctr][batch_ctr]
-                input_variable, lengths, ratings = current_batch    
-
-                current_reviewerIDs = torch.tensor(candidate_reviewerIDs[idx][batch_ctr])
-                
-
-                label_batch = label_sen_batch[0][batch_ctr]
-                input_variable_test, lengths_test, ratings_test = label_batch
-
-                for index_ , user_ in enumerate(current_reviewerIDs):
-                    
-                    tmp_usr =userObj.index2reviewerID[user_.item()]
-
-                    train_word_indexes = input_variable[:,index_].tolist()
-                    train_words = [voc.index2word[index] for index in train_word_indexes if voc.index2word[index] != 'PAD']
-
-                    test_word_indexes = input_variable_test[:,index_].tolist()
-                    test_words = [voc.index2word[index] for index in test_word_indexes if voc.index2word[index] != 'PAD']
-                    stop = 1
-
-                stop = 1
-    """
-
-    # pre-train words
-    if(opt.user_pretrain_wordVec == 'Y'):
+    # If loading Pre-train words
+    if(opt.use_pretrain_wordVec == 'Y'):
         weights_matrix = np.zeros((voc.num_words, 300))
         words_found = 0
 
@@ -484,18 +630,18 @@ if __name__ == "__main__":
         pretrain_wordVec = None
 
 
-    # Generate training batches
+    # Generate training batches & Train
     if(opt.mode == "train" or opt.mode == "both"):
         training_batches, training_asin_batches = pre_work.GenerateTrainingBatches(USER, itemObj, voc, num_of_reviews=opt.num_of_reviews, batch_size=opt.batchsize)
 
         Train(voc, opt.selectTable, training_batches, training_asin_batches, candidate_asins, candidate_reviewerIDs, training_batch_labels, label_sen_batch,
-            opt.save_dir, TrainEpoch=opt.epoch, latentK=opt.latentK, intra_method=opt.intra_attn_method , inter_method=opt.inter_attn_method,
+            opt.save_dir, TrainEpoch=opt.epoch, latentK=opt.latentK, hidden_size=opt.hidden, intra_method=opt.intra_attn_method , inter_method=opt.inter_attn_method,
             learning_rate = opt.lr, dropout=opt.dropout, isStoreModel=True, WriteTrainLoss=True, store_every = opt.save_model_freq, 
-            use_pretrain_item=False, isCatItemVec=True, RSNR=False, pretrain_wordVec=pretrain_wordVec)
+            use_pretrain_item=False, isCatItemVec=True, pretrain_wordVec=pretrain_wordVec)
 
     # Generate testing batches
     if(opt.mode == "test" or opt.mode == "showAttn" or 
-        opt.mode == "both" or opt.mode == "testG"):
+        opt.mode == "both" or opt.mode == "test_generation"):
 
         if(opt.test_on_traindata =='Y'):
             test_on_traindata = True
@@ -530,6 +676,27 @@ if __name__ == "__main__":
         testing_batches, testing_asin_batches = pre_work.GenerateTrainingBatches(USER, itemObj, voc, 
             num_of_reviews=opt.num_of_reviews, batch_size=opt.batchsize, testing=True)
 
+    # Testing(chose epoch)
+    if(opt.mode == "test_generation"):
+
+        # Setup epoch being chosen
+        chose_epoch = opt.epoch
+
+        # Loading IntraGRU
+        IntraGRU = list()
+        for idx in range(opt.num_of_reviews):
+            model = torch.load(R'{}/Model/IntraGRU_idx{}_epoch{}'.format(opt.save_dir, idx, chose_epoch))
+            IntraGRU.append(model)
+
+        # Loading InterGRU
+        InterGRU = torch.load(R'{}/Model/InterGRU_epoch{}'.format(opt.save_dir, chose_epoch))
+        # Loading DecoderModel
+        DecoderModel = torch.load(R'{}/Model/DecoderModel_epoch{}'.format(opt.save_dir, chose_epoch))
+
+        # evaluating
+        tokens_dict, scores_dict = evaluate(IntraGRU, InterGRU, DecoderModel, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, testing_sen_batches,
+            isCatItemVec=True, userObj=userObj, itemObj=itemObj, voc=voc)
+
 
     # Testing
     if(opt.mode == "test" or opt.mode == "both"):
@@ -549,35 +716,12 @@ if __name__ == "__main__":
             DecoderModel = torch.load(R'{}/Model/DecoderModel_epoch{}'.format(opt.save_dir, Epoch))
 
             # evaluating
-            RMSE = evaluate(IntraGRU, InterGRU, DecoderModel, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, testing_sen_batches,
-                isCatItemVec=True, RSNR=False, randomSetup=-1)
+            RMSE = evaluate_RMSE(IntraGRU, InterGRU, DecoderModel, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, testing_sen_batches,
+            isCatItemVec=True, userObj=userObj, itemObj=itemObj, voc=voc)
             print('Epoch:{}\tMSE:{}\t'.format(Epoch, RMSE))
 
-            with open(R'{}/Loss/TestingLoss.txt'.format(opt.save_dir),'a') as file:
+            with open(R'{}/Loss/TestingLoss_RMSE.txt'.format(opt.save_dir),'a') as file:
                 file.write('Epoch:{}\tRMSE:{}\n'.format(Epoch, RMSE))    
-
-
-    # Testing(chose epoch)
-    if(opt.mode == "testG"):
-        chose_epoch = opt.epoch
-        # Loading IntraGRU
-        IntraGRU = list()
-        for idx in range(opt.num_of_reviews):
-            model = torch.load(R'{}/Model/IntraGRU_idx{}_epoch{}'.format(opt.save_dir, idx, chose_epoch))
-            IntraGRU.append(model)
-
-        # Loading InterGRU
-        InterGRU = torch.load(R'{}/Model/InterGRU_epoch{}'.format(opt.save_dir, chose_epoch))
-
-        # Loading DecoderModel
-        DecoderModel = torch.load(R'{}/Model/DecoderModel_epoch{}'.format(opt.save_dir, chose_epoch))
-
-        # evaluating
-        tokens_dict, scores_dict = evaluate(IntraGRU, InterGRU, DecoderModel, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, testing_sen_batches,
-            isCatItemVec=True, RSNR=False, randomSetup=-1, userObj=userObj, voc=voc)
-        
-
-
 
 
 
@@ -594,4 +738,4 @@ if __name__ == "__main__":
 
         # evaluating
         RMSE = evaluate(IntraGRU, InterGRU, testing_batches, testing_asin_batches, testing_batch_labels, candidate_asins, candidate_reviewerIDs, 
-            isCatItemVec=True, RSNR=False, randomSetup=-1, isWriteAttn=True, userObj=userObj)
+            isCatItemVec=True, randomSetup=-1, isWriteAttn=True, userObj=userObj)
